@@ -219,12 +219,13 @@ and what holds it are recorded; the entry holds the reasoning.
 | D-37 | A deploy names an image digest with GitHub build provenance; no cosign signature and no SBOM | accepted | review |
 | D-38 | A release tag is a deploy, and the public JSON API is the versioning contract | accepted | review |
 | D-39 | Nothing internal enters the repository: no secret, no production data, no personal detail, no infrastructure identifier | accepted | leaks, leaks-staged, review |
-| D-40 | No agent commits, pushes, tags or merges; the owner merges every pull request | accepted | review |
+| D-40 | No agent commits, pushes, tags or merges; the owner merges every pull request | superseded by D-46 | — |
 | D-41 | Every `http.Server` sets its timeouts, and a live stream manages its own write deadline | accepted | review |
 | D-42 | Every log, the host's and the database's included, stays in the EU for at most 45 days, and no URL carries a token | accepted | review |
 | D-43 | Sign-in rate limits live in PostgreSQL and count requests, not sends | accepted | review |
 | D-44 | A Google or Apple identity is keyed on its issuer and subject, never an email address, and is linked only from a signed-in session after a fresh sign-in | accepted | review |
 | D-45 | Remove and clear wait for the Undo bar to close, so undoing them sends nothing | accepted | review |
+| D-46 | An agent commits and pushes only on a branch and opens a pull request; only the owner merges or tags | accepted | `main` ruleset, review |
 
 ### D-01 The product, its domain and its repository are all named loafkin
 
@@ -1135,4 +1136,23 @@ Rejected: a soft delete with a purge ticker, which keeps a cleared photo
 through the undo window. No undo for a clear.
 Cost: other members see a removal or a clear a few seconds late.
 
-Next ID: D-46
+### D-46 An agent commits and pushes only on a branch and opens a pull request; only the owner merges or tags
+
+An agent may commit, push a branch other than `main` and open a pull
+request. It never merges, approves its own pull request, or tags a
+release, since a tag is a deploy (D-38). Every change, Dependabot's
+included, reaches `main` through a pull request the owner reviews and
+merges, so nothing enters `main` before the owner has read it.
+
+The `main` ruleset holds this. It requires a pull request and the CI
+checks on an up-to-date branch, and it blocks force-pushes and
+deletion, with no one allowed to bypass it.
+
+Rejected: D-40's rule that only the owner commits and pushes, which
+made every commit wait for the owner. An agent merging its own pull
+requests.
+Cost: a pushed branch is public at once, so a leak in a branch commit
+is published before review. The commit hooks and the CI history scan
+stay the guard (D-39).
+
+Next ID: D-47
