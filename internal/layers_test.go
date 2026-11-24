@@ -10,13 +10,15 @@ import (
 )
 
 // The layers of D-20, from the top. Entry points share a rank, so none
-// may import another. A leaf is imported only by the command.
+// may import another. A leaf is imported only by the command, and an
+// HTTP base package only by the command and the entry points.
 const (
 	rankStore = iota
 	rankDomain
 	rankEntry
 	rankCommand
-	leaf = -1
+	leaf     = -1
+	httpBase = -2
 )
 
 var layers = map[string]int{
@@ -27,7 +29,7 @@ var layers = map[string]int{
 	"worker":     rankEntry,
 	"domain":     rankDomain,
 	"store":      rankStore,
-	"route":      rankStore,
+	"route":      httpBase,
 	"migrations": leaf,
 	"assets":     leaf,
 }
@@ -65,7 +67,13 @@ func checkImport(from, to string) string {
 		}
 		return from + " imports " + to + ", which only the command may import"
 	}
-	if fromRank == leaf || fromRank <= toRank {
+	if toRank == httpBase {
+		if fromRank == rankCommand || fromRank == rankEntry {
+			return ""
+		}
+		return from + " imports " + to + ", which only the command and the entry points may import"
+	}
+	if fromRank == leaf || fromRank == httpBase || fromRank <= toRank {
 		return from + " imports " + to + ", which is not below it"
 	}
 	return ""
@@ -89,6 +97,11 @@ func TestCheckImport(t *testing.T) {
 		{"migrations", "store", false},
 		{"web", "command", false},
 		{"web", "unknown", false},
+		{"command", "route", true},
+		{"web", "route", true},
+		{"domain", "route", false},
+		{"store", "route", false},
+		{"route", "store", false},
 		{"unknown", "store", false},
 	}
 	for _, tt := range tests {

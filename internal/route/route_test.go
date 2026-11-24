@@ -8,6 +8,10 @@ import (
 	"loafkin.com/internal/route"
 )
 
+var denied = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+})
+
 func TestHandlerRunsOnlyBehindADeclaredPermission(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -17,12 +21,13 @@ func TestHandlerRunsOnlyBehindADeclaredPermission(t *testing.T) {
 	}{
 		{"public", route.Public, http.StatusTeapot, true},
 		{"undeclared", 0, http.StatusNotFound, false},
-		{"unknown", route.Public + 100, http.StatusNotFound, false},
+		{"below Public", -1, http.StatusNotFound, false},
+		{"after the last permission", route.Public + 1, http.StatusNotFound, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ran := false
-			table := route.NewTable()
+			table := route.NewTable(denied)
 			table.HandleFunc("GET /x", tt.permission, func(w http.ResponseWriter, r *http.Request) {
 				ran = true
 				w.WriteHeader(http.StatusTeapot)
@@ -40,7 +45,7 @@ func TestHandlerRunsOnlyBehindADeclaredPermission(t *testing.T) {
 }
 
 func TestRoutesListsEveryRegistration(t *testing.T) {
-	table := route.NewTable()
+	table := route.NewTable(denied)
 	noop := func(http.ResponseWriter, *http.Request) {}
 	table.HandleFunc("GET /a", route.Public, noop)
 	table.HandleFunc("POST /b", 0, noop)

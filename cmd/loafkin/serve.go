@@ -84,9 +84,16 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 	return logRequests(logger, securityHeaders(cop.Handler(routes(st))))
 }
 
+// denyUndeclared answers a route with an undeclared permission like a
+// missing one (D-22, D-33).
+func denyUndeclared(w http.ResponseWriter, r *http.Request) {
+	setErrorCode(r, "permission_undeclared")
+	writeText(w, http.StatusNotFound, "Not Found")
+}
+
 // routes builds the table of every route loafkin serves.
 func routes(st *store.Store) *route.Table {
-	t := route.NewTable()
+	t := route.NewTable(http.HandlerFunc(denyUndeclared))
 	t.HandleFunc("GET /livez", route.Public, func(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusOK, "ok")
 	})
