@@ -27,6 +27,7 @@ var layers = map[string]int{
 	"worker":     rankEntry,
 	"domain":     rankDomain,
 	"store":      rankStore,
+	"route":      rankStore,
 	"migrations": leaf,
 	"assets":     leaf,
 }
@@ -129,8 +130,8 @@ func TestImportDirection(t *testing.T) {
 			t.Fatalf("walking %s: %v", root, err)
 		}
 	}
-	// cmd/loafkin, internal/store and internal/migrations at least.
-	if packages < 3 {
-		t.Errorf("read %d packages, want at least 3", packages)
+	// cmd/loafkin, internal/route, internal/store and internal/migrations at least.
+	if packages < 4 {
+		t.Errorf("read %d packages, want at least 4", packages)
 	}
 }

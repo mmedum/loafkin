@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"loafkin.com/internal/route"
 	"loafkin.com/internal/store"
 )
 
@@ -73,13 +74,25 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 }
 
 func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
+	// The deny handler answers with loafkin's own code and text, where Go's
+	// default writes its own error text (D-33).
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setErrorCode(r, "cross_origin")
+		writeText(w, http.StatusForbidden, "Forbidden")
+	}))
+	return logRequests(logger, securityHeaders(cop.Handler(routes(st))))
+}
+
+// routes builds the table of every route loafkin serves.
+func routes(st *store.Store) *route.Table {
+	t := route.NewTable()
+	t.HandleFunc("GET /livez", route.Public, func(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusOK, "ok")
 	})
 	// healthz answers 503 while the database is out of reach. Nothing
 	// restarts on it; a restart probe uses livez.
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	t.HandleFunc("GET /healthz", route.Public, func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
 		defer cancel()
 		if err := st.Ping(ctx); err != nil {
@@ -89,15 +102,7 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 		}
 		writeText(w, http.StatusOK, "ok")
 	})
-
-	// The deny handler answers with loafkin's own code and text, where Go's
-	// default writes its own error text (D-33).
-	cop := http.NewCrossOriginProtection()
-	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setErrorCode(r, "cross_origin")
-		writeText(w, http.StatusForbidden, "Forbidden")
-	}))
-	return logRequests(logger, securityHeaders(cop.Handler(mux)))
+	return t
 }
 
 func writeText(w http.ResponseWriter, status int, body string) {
