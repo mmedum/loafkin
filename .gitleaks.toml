@@ -45,10 +45,12 @@ regexTarget = "match"
 regexes = [
   # RFC 2606 and RFC 6761 reserve these; they never resolve.
   '''^[A-Za-z0-9._%+\-]+@(?:[A-Za-z0-9\-]+\.)*(?:example\.(?:com|net|org)|example|test|invalid|localhost)$''',
-  # Service addresses, not people: SSH remotes and co-author trailers.
+  # Service addresses, not people: SSH remotes, co-author trailers and
+  # Dependabot's sign-off.
   '''^git@github\.com$''',
   '''^[A-Za-z0-9._%+\-]+@users\.noreply\.github\.com$''',
-  '''^noreply@(?:github\.com|anthropic\.com)$''',
+  '''^(?:noreply|support)@github\.com$''',
+  '''^noreply@anthropic\.com$''',
   # A local development database, never a deployed one.
   '''://[^\s:/@]+:[^\s:/@]+@(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:/|$)''',
   # Synthetic Google secrets: the prefix followed by EXAMPLE, FAKE or TEST.
