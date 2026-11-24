@@ -1,8 +1,12 @@
-# The workflows pin every action to a commit SHA, so the pins need a
-# weekly bump to stay current.
+# The workflows pin every action to a commit SHA, and go.mod pins every
+# module, so both need a weekly bump to stay current.
 version: 2
 updates:
   - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly

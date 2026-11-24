@@ -8,12 +8,15 @@ never goes in an issue or a pull request:
 
 ## Setting up
 
-- Install Go at the version the CI workflow names.
+- Install Go at the version `go.mod` names.
 - Run `make hooks` once per clone. It points git at `.githooks`, whose
   pre-commit hook runs `make leaks-staged` on the staged changes.
 
 ## Before a pull request
 
+- `make check` passes. It runs gofmt, go vet, the tests and govulncheck,
+  as CI does. Database tests need `LOAFKIN_TEST_DATABASE_URL` set to a
+  scratch PostgreSQL, and skip without it; CI always sets it (D-35).
 - `make leaks` passes. It runs gitleaks over the working tree and the
   full history, as CI does.
 - Nothing internal enters the repository: no secret, no production
