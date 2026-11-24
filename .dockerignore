@@ -1,0 +1,6 @@
+# The build reads only go.mod, go.sum, cmd and internal.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/

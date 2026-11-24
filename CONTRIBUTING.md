@@ -11,6 +11,17 @@ never goes in an issue or a pull request:
 - Install Go at the version `go.mod` names.
 - Run `make hooks` once per clone. It points git at `.githooks`, whose
   pre-commit hook runs `make leaks-staged` on the staged changes.
+- Install Podman with its compose command, or Docker with
+  `CONTAINER=docker` set, to run the server locally.
+
+## Running locally
+
+- `make run` serves from source on `127.0.0.1:8080`. It first starts a
+  local PostgreSQL from `compose.yaml` with `make db`, and the server
+  applies the migrations at startup (D-25).
+- `make run-image` builds the production image from the `Dockerfile`
+  and serves it on the same address, against the same database.
+- `make db-stop` removes the database and its data.
 
 ## Before a pull request
 

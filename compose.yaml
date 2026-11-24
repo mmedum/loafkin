@@ -1,0 +1,29 @@
+# Local development only. The database trusts every connection, keeps
+# no volume and listens on loopback; `make db-stop` deletes its data.
+name: loafkin
+services:
+  db:
+    image: docker.io/library/postgres:18@sha256:eece53c7c4410fb9c6556a19b8e0f2d61708a5893e2aa0a1e3c716661374ab18
+    environment:
+      POSTGRES_USER: loafkin
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "loafkin"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  # The production image, started by `make run-image`.
+  app:
+    profiles: [image]
+    build: .
+    image: loafkin:dev
+    environment:
+      LOAFKIN_DATABASE_URL: postgres://loafkin@db:5432/loafkin?sslmode=disable
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy

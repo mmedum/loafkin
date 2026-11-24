@@ -17,6 +17,11 @@ License 2.0 (D-05), and everything committed stays public for good.
   scratch PostgreSQL.
 - `make leaks` runs gitleaks over the working tree, the full history and
   every commit message, as CI does.
+- `make run` serves from source on `127.0.0.1:8080`, against the local
+  PostgreSQL that `make db` starts from `compose.yaml`. `make run-image`
+  serves the production image from the `Dockerfile` instead. `make
+  db-stop` removes the database and its data. Podman is the default;
+  set `CONTAINER=docker` for Docker.
 
 ## Hard rules
 
