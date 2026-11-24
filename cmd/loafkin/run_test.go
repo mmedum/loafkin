@@ -157,7 +157,8 @@ func TestCrossOriginPostIsRefused(t *testing.T) {
 // TestPanicBeforeTheResponseDropsHandlerHeaders checks that the generic
 // 500 does not carry a cookie the handler set before it panicked.
 func TestPanicBeforeTheResponseDropsHandlerHeaders(t *testing.T) {
-	h := logRequests(slog.New(slog.DiscardHandler), securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var logs bytes.Buffer
+	h := logRequests(slog.New(slog.NewJSONHandler(&logs, nil)), securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Set-Cookie", "__Host-session=half-made")
 		panic("boom")
 	})))
@@ -171,6 +172,9 @@ func TestPanicBeforeTheResponseDropsHandlerHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("500 carries Referrer-Policy %q, want no-referrer", got)
+	}
+	if lines := logLines(t, &logs); len(lines) != 1 || lines[0]["error_code"] != "panic" {
+		t.Errorf("logged %v, want one line with error_code panic", lines)
 	}
 }
 
@@ -199,9 +203,10 @@ func TestPanicAfterTheResponseStartedAborts(t *testing.T) {
 	}
 }
 
-// TestRequestLogCarriesNoPathOrSecrets drives a matched route, an
-// unmatched one and a panic with canary values in the path, query,
-// cookie, Authorization header and body (D-34).
+// TestRequestLogCarriesNoPathOrSecrets drives a matched route, a member
+// route whose session lookup fails, an unmatched one and a panic with
+// canary values in the path, query, cookie, Authorization header and
+// body (D-34).
 func TestRequestLogCarriesNoPathOrSecrets(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -212,32 +217,35 @@ func TestRequestLogCarriesNoPathOrSecrets(t *testing.T) {
 
 	tests := []struct {
 		handler    http.Handler
+		method     string
 		target     string
 		wantRoute  string
 		wantStatus float64
 	}{
-		{live, "/livez?token=canary-query", "GET /livez", 200},
-		{live, "/canary-path", "unmatched", 404},
-		{h, "/boom/canary-id", "GET /boom/{id}", 500},
+		{live, http.MethodGet, "/livez?token=canary-query", "GET /livez", 200},
+		{live, http.MethodPost, "/sign-out?token=canary-query", "POST /sign-out", 500},
+		{live, http.MethodGet, "/canary-path", "unmatched", 404},
+		{h, http.MethodGet, "/boom/canary-id", "GET /boom/{id}", 500},
 	}
 	for _, tt := range tests {
 		logs.Reset()
-		req := httptest.NewRequest(http.MethodGet, tt.target, strings.NewReader("canary-body"))
+		req := httptest.NewRequest(tt.method, tt.target, strings.NewReader("canary-body"))
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Cookie", "__Host-session=canary-cookie")
 		req.Header.Set("Authorization", "Bearer canary-token")
 		rec := httptest.NewRecorder()
 		tt.handler.ServeHTTP(rec, req)
 
 		if strings.Contains(logs.String(), "canary") {
-			t.Errorf("GET %s: log carries a canary: %s", tt.target, logs.String())
+			t.Errorf("%s %s: log carries a canary: %s", tt.method, tt.target, logs.String())
 		}
 		lines := logLines(t, &logs)
 		if len(lines) != 1 || lines[0]["route"] != tt.wantRoute || lines[0]["status"] != tt.wantStatus {
-			t.Errorf("GET %s logged %v, want one line with route %q and status %v",
-				tt.target, lines, tt.wantRoute, tt.wantStatus)
+			t.Errorf("%s %s logged %v, want one line with route %q and status %v",
+				tt.method, tt.target, lines, tt.wantRoute, tt.wantStatus)
 		}
 		if strings.Contains(rec.Body.String(), "canary") {
-			t.Errorf("GET %s: response carries a canary: %q", tt.target, rec.Body.String())
+			t.Errorf("%s %s: response carries a canary: %q", tt.method, tt.target, rec.Body.String())
 		}
 	}
 }

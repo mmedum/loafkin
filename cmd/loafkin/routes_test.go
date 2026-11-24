@@ -40,9 +40,9 @@ func TestEveryRouteDeclaresAPermission(t *testing.T) {
 	if bad := undeclared(all); len(bad) > 0 {
 		t.Errorf("routes without a declared permission: %q", bad)
 	}
-	// GET /livez and GET /healthz at least.
-	if len(all) < 2 {
-		t.Errorf("read %d routes, want at least 2", len(all))
+	// GET /livez, GET /healthz and POST /sign-out at least.
+	if len(all) < 3 {
+		t.Errorf("read %d routes, want at least 3", len(all))
 	}
 }
 
@@ -50,7 +50,7 @@ func TestUndeclaredRouteAnswersLikeAMissingOne(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	ran := false
-	table := route.NewTable(http.HandlerFunc(denyUndeclared))
+	table := route.NewTable(http.HandlerFunc(denyUndeclared), nil)
 	table.HandleFunc("GET /forgotten", 0, func(http.ResponseWriter, *http.Request) { ran = true })
 
 	rec := httptest.NewRecorder()

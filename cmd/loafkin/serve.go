@@ -12,8 +12,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"loafkin.com/internal/domain"
 	"loafkin.com/internal/route"
 	"loafkin.com/internal/store"
+	"loafkin.com/internal/web"
 )
 
 // D-41: the read timeout leaves room for a photo upload on a slow phone
@@ -78,8 +80,7 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 	// default writes its own error text (D-33).
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setErrorCode(r, "cross_origin")
-		writeText(w, http.StatusForbidden, "Forbidden")
+		route.Fail(w, r, http.StatusForbidden, "cross_origin")
 	}))
 	return logRequests(logger, securityHeaders(cop.Handler(routes(st))))
 }
@@ -87,15 +88,17 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 // denyUndeclared answers a route with an undeclared permission like a
 // missing one (D-22, D-33).
 func denyUndeclared(w http.ResponseWriter, r *http.Request) {
-	setErrorCode(r, "permission_undeclared")
-	writeText(w, http.StatusNotFound, "Not Found")
+	route.Fail(w, r, http.StatusNotFound, "permission_undeclared")
 }
 
 // routes builds the table of every route loafkin serves.
 func routes(st *store.Store) *route.Table {
-	t := route.NewTable(http.HandlerFunc(denyUndeclared))
+	sessions := domain.NewSessions(st, time.Now)
+	t := route.NewTable(http.HandlerFunc(denyUndeclared), map[route.Permission]route.Guard{
+		route.Member: web.RequireMember(sessions),
+	})
 	t.HandleFunc("GET /livez", route.Public, func(w http.ResponseWriter, r *http.Request) {
-		writeText(w, http.StatusOK, "ok")
+		route.WriteText(w, http.StatusOK, "ok")
 	})
 	// healthz answers 503 while the database is out of reach. Nothing
 	// restarts on it; a restart probe uses livez.
@@ -103,20 +106,14 @@ func routes(st *store.Store) *route.Table {
 		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
 		defer cancel()
 		if err := st.Ping(ctx); err != nil {
-			setErrorCode(r, store.ErrorCode(err, "db_unavailable"))
-			writeText(w, http.StatusServiceUnavailable, "unavailable: database")
+			route.SetErrorCode(r, store.ErrorCode(err, "db_unavailable"))
+			route.WriteText(w, http.StatusServiceUnavailable, "unavailable: database")
 			return
 		}
-		writeText(w, http.StatusOK, "ok")
+		route.WriteText(w, http.StatusOK, "ok")
 	})
+	web.Register(t, sessions)
 	return t
-}
-
-func writeText(w http.ResponseWriter, status int, body string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_, _ = io.WriteString(w, body+"\n")
 }
 
 func setSecurityHeaders(h http.Header) {
@@ -133,26 +130,6 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-type requestInfoKey struct{}
-
-type requestInfo struct {
-	id        string
-	errorCode string
-}
-
-func requestInfoFrom(r *http.Request) *requestInfo {
-	info, _ := r.Context().Value(requestInfoKey{}).(*requestInfo)
-	if info == nil {
-		return &requestInfo{}
-	}
-	return info
-}
-
-// setErrorCode records the code that the request's log line carries.
-func setErrorCode(r *http.Request, code string) {
-	requestInfoFrom(r).errorCode = code
-}
-
 // logRequests writes one line per request with the route pattern, the
 // outcome, the duration and a request id, never the path, query, cookies,
 // headers or body (D-34). It also recovers panics, so a panicking request
@@ -160,30 +137,31 @@ func setErrorCode(r *http.Request, code string) {
 func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		info := &requestInfo{id: rand.Text()[:16]}
-		w.Header().Set("X-Request-Id", info.id)
+		info := &route.Info{ID: rand.Text()[:16]}
+		w.Header().Set("X-Request-Id", info.ID)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		// No handler below copies the request, so ServeMux sets Pattern
-		// on this one, and it is readable once ServeHTTP returns.
-		r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
+		// Nothing between here and ServeMux copies the request, so ServeMux
+		// sets Pattern on this one, and it is readable once ServeHTTP
+		// returns. A guard's copy comes after the match.
+		r = route.WithInfo(r, info)
 
 		defer func() {
 			abort := false
 			if v := recover(); v != nil {
-				abort = answerPanic(sw, info, v)
+				abort = answerPanic(sw, r, v)
 			}
-			route := r.Pattern
-			if route == "" {
-				route = "unmatched"
+			pattern := r.Pattern
+			if pattern == "" {
+				pattern = "unmatched"
 			}
 			attrs := []any{
-				"route", route,
+				"route", pattern,
 				"status", sw.status,
 				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", info.id,
+				"request_id", info.ID,
 			}
-			if info.errorCode != "" {
-				attrs = append(attrs, "error_code", info.errorCode)
+			if info.ErrorCode != "" {
+				attrs = append(attrs, "error_code", info.ErrorCode)
 			}
 			logger.Info("request", attrs...)
 			if abort {
@@ -199,20 +177,20 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 // the handler set with a generic 500. After that, it reports that the
 // connection must be aborted, since the client already has part of a
 // response.
-func answerPanic(sw *statusWriter, info *requestInfo, v any) (abort bool) {
+func answerPanic(sw *statusWriter, r *http.Request, v any) (abort bool) {
 	if v == http.ErrAbortHandler {
-		info.errorCode = "aborted"
+		route.SetErrorCode(r, "aborted")
 		return true
 	}
-	info.errorCode = "panic"
 	if sw.wroteHeader {
+		route.SetErrorCode(r, "panic")
 		return true
 	}
 	h := sw.Header()
 	clear(h)
 	setSecurityHeaders(h)
-	h.Set("X-Request-Id", info.id)
-	writeText(sw, http.StatusInternalServerError, "Something went wrong. Request id: "+info.id)
+	h.Set("X-Request-Id", route.InfoFrom(r).ID)
+	route.Fail(sw, r, http.StatusInternalServerError, "panic")
 	return false
 }
 

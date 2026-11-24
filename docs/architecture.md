@@ -630,7 +630,8 @@ command; the entry points, which are the page handlers, the API
 handlers, the live updates and the workers; the domain; and the store.
 The migrations and the browser assets are leaves only the command
 imports. The route table (D-22) sits between the entry points and
-the domain, because it depends on `net/http`. A layer imports only layers
+the domain, because it depends on `net/http`. The test database helper
+may import any package, and only tests import it. A layer imports only layers
 below it, entry points never import each other, and a gate fails on an
 import the other way.
 [Gitea's backend guidelines](https://github.com/go-gitea/gitea/blob/eb3bc196ec00efd184b663dead91ca89ca2ee0c3/docs/guidelines-backend.md)
