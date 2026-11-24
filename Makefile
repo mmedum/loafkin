@@ -39,14 +39,16 @@ leaks-staged: ## gitleaks over the staged changes; the pre-commit hook runs this
 leaks-msg: ## gitleaks over one commit message; the commit-msg hook runs this
 	go run $(GITLEAKS) stdin $(GITLEAKS_FLAGS) < "$(MSG)"
 
-db: ## Start the local PostgreSQL from compose.yaml and wait until it accepts connections
-	$(COMPOSE) up --detach --wait db
+db: ## Start the local PostgreSQL and Mailpit from compose.yaml and wait until they are ready
+	$(COMPOSE) up --detach --wait db mailpit
 
-db-stop: ## Remove the local PostgreSQL and its data
+db-stop: ## Remove the local PostgreSQL, Mailpit and their data
 	$(COMPOSE) --profile image down
 
-run: db ## Serve from source on 127.0.0.1:8080 against the local PostgreSQL
-	LOAFKIN_DATABASE_URL='$(DEV_DATABASE_URL)' LOAFKIN_ADDR=127.0.0.1:8080 go run ./cmd/loafkin serve
+run: db ## Serve from source on 127.0.0.1:8080 against the local PostgreSQL and Mailpit
+	LOAFKIN_DATABASE_URL='$(DEV_DATABASE_URL)' LOAFKIN_ADDR=127.0.0.1:8080 \
+	  LOAFKIN_SMTP_ADDR=127.0.0.1:1025 LOAFKIN_SMTP_TLS=none LOAFKIN_MAIL_FROM=loafkin@example.com \
+	  go run ./cmd/loafkin serve
 
 image: ## Build the production image from the Dockerfile
 	$(COMPOSE) --profile image build app

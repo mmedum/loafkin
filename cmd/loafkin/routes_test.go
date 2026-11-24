@@ -36,7 +36,7 @@ func TestUndeclared(t *testing.T) {
 
 // TestEveryRouteDeclaresAPermission holds D-22 over the full table.
 func TestEveryRouteDeclaresAPermission(t *testing.T) {
-	all := routes(nil).Routes()
+	all := routes(nil, nil).Routes()
 	if bad := undeclared(all); len(bad) > 0 {
 		t.Errorf("routes without a declared permission: %q", bad)
 	}

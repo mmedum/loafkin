@@ -16,6 +16,7 @@ import (
 	"loafkin.com/internal/route"
 	"loafkin.com/internal/store"
 	"loafkin.com/internal/web"
+	"loafkin.com/internal/worker"
 )
 
 // D-41: the read timeout leaves room for a photo upload on a slow phone
@@ -27,6 +28,10 @@ const (
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 20 * time.Second
 	healthTimeout     = 2 * time.Second
+	// The outbox is polled every few seconds, so a sign-in code arrives
+	// soon after it is asked for; expired rows go hourly.
+	workerPoll  = 2 * time.Second
+	workerSweep = time.Hour
 )
 
 // contentSecurityPolicy loads everything from loafkin's own origin and
@@ -45,8 +50,10 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 		return fail("startup failed", "listen_failed")
 	}
 
+	st := store.New(pool)
+	sessions := domain.NewSessions(st, time.Now)
 	srv := &http.Server{
-		Handler:           newHandler(store.New(pool), logger),
+		Handler:           newHandler(st, sessions, logger),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -55,6 +62,19 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 		// text; recoverPanics logs the one that matters as a code.
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
+
+	// The worker outlives the signal: D-29's order stops it only after the
+	// server has stopped accepting requests, and before the pool closes.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWork()
+	worked := make(chan struct{})
+	go func() {
+		defer close(worked)
+		(&worker.Worker{
+			Store: st, Sessions: sessions, Sender: &cfg.smtp, Logger: logger,
+			Now: time.Now, Poll: workerPoll, Sweep: workerSweep,
+		}).Run(workCtx)
+	}()
 
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
@@ -68,21 +88,24 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fail("shutdown incomplete", store.ErrorCode(err, "shutdown_failed"))
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	stopWork()
+	<-worked
+	if shutdownErr != nil {
+		return fail("shutdown incomplete", store.ErrorCode(shutdownErr, "shutdown_failed"))
 	}
 	logger.Info("stopped")
 	return nil
 }
 
-func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
+func newHandler(st *store.Store, sessions *domain.Sessions, logger *slog.Logger) http.Handler {
 	// The deny handler answers with loafkin's own code and text, where Go's
 	// default writes its own error text (D-33).
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route.Fail(w, r, http.StatusForbidden, "cross_origin")
 	}))
-	return logRequests(logger, securityHeaders(cop.Handler(routes(st))))
+	return logRequests(logger, securityHeaders(cop.Handler(routes(st, sessions))))
 }
 
 // denyUndeclared answers a route with an undeclared permission like a
@@ -92,8 +115,7 @@ func denyUndeclared(w http.ResponseWriter, r *http.Request) {
 }
 
 // routes builds the table of every route loafkin serves.
-func routes(st *store.Store) *route.Table {
-	sessions := domain.NewSessions(st, time.Now)
+func routes(st *store.Store, sessions *domain.Sessions) *route.Table {
 	t := route.NewTable(http.HandlerFunc(denyUndeclared), map[route.Permission]route.Guard{
 		route.Member: web.RequireMember(sessions),
 	})

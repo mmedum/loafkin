@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 
+	"loafkin.com/internal/mail"
 	"loafkin.com/internal/migrations"
 	"loafkin.com/internal/store"
 )
@@ -21,8 +22,14 @@ commands:
   migrate  apply pending migrations and exit
 
 environment:
-  LOAFKIN_DATABASE_URL  PostgreSQL connection string (required)
-  LOAFKIN_ADDR          address to listen on (default :8080)
+  LOAFKIN_DATABASE_URL   PostgreSQL connection string (required)
+  LOAFKIN_ADDR           address to listen on (default :8080)
+  LOAFKIN_SMTP_ADDR      SMTP server host:port (required by serve)
+  LOAFKIN_SMTP_TLS       implicit (default), starttls, or none for a local
+                         mail catcher
+  LOAFKIN_SMTP_USERNAME  SMTP user, if the server asks for one
+  LOAFKIN_SMTP_PASSWORD  SMTP password
+  LOAFKIN_MAIL_FROM      sender address of every email (required by serve)
 `
 
 // errUsage reports a command line that run answered with the usage text.
@@ -42,6 +49,7 @@ func fail(msg, code string) error { return &failure{msg: msg, code: code} }
 type config struct {
 	addr        string
 	databaseURL string
+	smtp        mail.SMTP
 }
 
 // run is the whole program behind main, so tests can call it too (D-17).
@@ -70,6 +78,22 @@ func runCommand(ctx context.Context, command string, getenv func(string) string,
 	}
 	if cfg.databaseURL == "" {
 		return fail("LOAFKIN_DATABASE_URL is not set", "config_missing")
+	}
+	if command == "serve" {
+		tlsMode, err := mail.ParseTLS(getenv("LOAFKIN_SMTP_TLS"))
+		if err != nil {
+			return fail("LOAFKIN_SMTP_TLS is implicit, starttls or none", "config_invalid")
+		}
+		cfg.smtp = mail.SMTP{
+			Addr:     getenv("LOAFKIN_SMTP_ADDR"),
+			Username: getenv("LOAFKIN_SMTP_USERNAME"),
+			Password: getenv("LOAFKIN_SMTP_PASSWORD"),
+			From:     getenv("LOAFKIN_MAIL_FROM"),
+			TLS:      tlsMode,
+		}
+		if cfg.smtp.Addr == "" || cfg.smtp.From == "" {
+			return fail("LOAFKIN_SMTP_ADDR and LOAFKIN_MAIL_FROM must be set", "config_missing")
+		}
 	}
 
 	pool, err := openPool(ctx, cfg.databaseURL)

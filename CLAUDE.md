@@ -18,10 +18,11 @@ License 2.0 (D-05), and everything committed stays public for good.
 - `make leaks` runs gitleaks over the working tree, the full history and
   every commit message, as CI does.
 - `make run` serves from source on `127.0.0.1:8080`, against the local
-  PostgreSQL that `make db` starts from `compose.yaml`. `make run-image`
-  serves the production image from the `Dockerfile` instead. `make
-  db-stop` removes the database and its data. Podman is the default;
-  set `CONTAINER=docker` for Docker.
+  PostgreSQL and Mailpit that `make db` starts from `compose.yaml`.
+  Mailpit shows every sent email on `http://127.0.0.1:8025`. `make
+  run-image` serves the production image from the `Dockerfile` instead.
+  `make db-stop` removes the database, Mailpit and their data. Podman is
+  the default; set `CONTAINER=docker` for Docker.
 
 ## Hard rules
 

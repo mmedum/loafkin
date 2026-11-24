@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"loafkin.com/internal/domain"
 	"loafkin.com/internal/store"
 )
 
@@ -43,6 +45,36 @@ func TestRunRefusesBadArguments(t *testing.T) {
 			}
 			if !strings.HasPrefix(stderr.String(), "usage: loafkin") {
 				t.Errorf("run(%q) wrote %q, want the usage text", tt.args, stderr.String())
+			}
+		})
+	}
+}
+
+func TestServeNeedsValidMailSettings(t *testing.T) {
+	base := map[string]string{
+		"LOAFKIN_DATABASE_URL": "postgres://loafkin@127.0.0.1:1/loafkin",
+		"LOAFKIN_SMTP_ADDR":    "127.0.0.1:1",
+		"LOAFKIN_MAIL_FROM":    "loafkin@example.com",
+	}
+	tests := []struct {
+		name     string
+		set      map[string]string
+		wantCode string
+	}{
+		{"no SMTP address", map[string]string{"LOAFKIN_SMTP_ADDR": ""}, "config_missing"},
+		{"no sender address", map[string]string{"LOAFKIN_MAIL_FROM": ""}, "config_missing"},
+		{"unknown TLS mode", map[string]string{"LOAFKIN_SMTP_TLS": "off"}, "config_invalid"},
+		// Valid settings get as far as the unreachable database.
+		{"valid", map[string]string{"LOAFKIN_SMTP_TLS": "starttls"}, "db_connect_failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vars := maps.Clone(base)
+			maps.Copy(vars, tt.set)
+			var stderr bytes.Buffer
+			_ = run(t.Context(), []string{"serve"}, env(vars), &stderr)
+			if got := logLines(t, &stderr); len(got) != 1 || got[0]["error_code"] != tt.wantCode {
+				t.Errorf("run(serve) with %v logged %v, want one line with error_code %s", tt.set, got, tt.wantCode)
 			}
 		})
 	}
@@ -76,6 +108,13 @@ func TestRunLogsNoConnectionDetails(t *testing.T) {
 	}
 }
 
+// handlerFor serves every route over a store that cannot connect.
+func handlerFor(t *testing.T, logger *slog.Logger) http.Handler {
+	t.Helper()
+	st := unreachableStore(t)
+	return newHandler(st, domain.NewSessions(st, time.Now), logger)
+}
+
 // unreachableStore has a pool whose every connection attempt fails.
 func unreachableStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -100,7 +139,7 @@ func TestHealth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			var logs bytes.Buffer
-			h := newHandler(unreachableStore(t), slog.New(slog.NewJSONHandler(&logs, nil)))
+			h := handlerFor(t, slog.New(slog.NewJSONHandler(&logs, nil)))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
 			if rec.Code != tt.wantStatus || rec.Body.String() != tt.wantBody {
@@ -115,7 +154,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
-	h := newHandler(unreachableStore(t), slog.New(slog.DiscardHandler))
+	h := handlerFor(t, slog.New(slog.DiscardHandler))
 	want := map[string]string{
 		"Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; " +
 			"img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
@@ -141,7 +180,7 @@ func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 // text and code, not Go's error text (D-14, D-33).
 func TestCrossOriginPostIsRefused(t *testing.T) {
 	var logs bytes.Buffer
-	h := newHandler(unreachableStore(t), slog.New(slog.NewJSONHandler(&logs, nil)))
+	h := handlerFor(t, slog.New(slog.NewJSONHandler(&logs, nil)))
 	req := httptest.NewRequest(http.MethodPost, "/livez", nil)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	rec := httptest.NewRecorder()
@@ -213,7 +252,7 @@ func TestRequestLogCarriesNoPathOrSecrets(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /boom/{id}", func(http.ResponseWriter, *http.Request) { panic("canary-panic") })
 	h := logRequests(logger, mux)
-	live := newHandler(unreachableStore(t), logger)
+	live := handlerFor(t, logger)
 
 	tests := []struct {
 		handler    http.Handler
@@ -297,6 +336,8 @@ func TestServeAnswersAndStops(t *testing.T) {
 		done <- run(ctx, []string{"serve"}, env(map[string]string{
 			"LOAFKIN_DATABASE_URL": url,
 			"LOAFKIN_ADDR":         addr,
+			"LOAFKIN_SMTP_ADDR":    "127.0.0.1:1",
+			"LOAFKIN_MAIL_FROM":    "loafkin@example.com",
 		}), &logs)
 	}()
 

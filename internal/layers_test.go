@@ -34,6 +34,7 @@ var layers = map[string]int{
 	"route":      rankRoute,
 	"migrations": leaf,
 	"assets":     leaf,
+	"mail":       leaf,
 	"testdb":     testHelper,
 }
 
