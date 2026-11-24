@@ -6,6 +6,7 @@ package testdb
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,25 +16,36 @@ import (
 )
 
 // Open returns a pool on the migrated test database, and skips the test
-// when LOAFKIN_TEST_DATABASE_URL is not set.
+// when LOAFKIN_TEST_DATABASE_URL is not set. Every test in one test
+// binary shares the pool, so the migrations run once per binary.
 func Open(t testing.TB) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("LOAFKIN_TEST_DATABASE_URL")
-	if url == "" {
+	if os.Getenv("LOAFKIN_TEST_DATABASE_URL") == "" {
 		t.Skip("LOAFKIN_TEST_DATABASE_URL is not set")
 	}
-	pool, err := pgxpool.New(t.Context(), url)
+	pool, err := shared()
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
-	if _, err := migrations.Up(t.Context(), db); err != nil {
-		t.Fatalf("migrating the test database: %v", err)
-	}
 	return pool
 }
+
+// shared opens and migrates the test database once. The pool lives as
+// long as the test binary.
+var shared = sync.OnceValues(func() (*pgxpool.Pool, error) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, os.Getenv("LOAFKIN_TEST_DATABASE_URL"))
+	if err != nil {
+		return nil, err
+	}
+	db := stdlib.OpenDBFromPool(pool)
+	defer db.Close()
+	if _, err := migrations.Up(ctx, db); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+})
 
 // NewAccount inserts an account that the test deletes when it ends,
 // with its sessions.

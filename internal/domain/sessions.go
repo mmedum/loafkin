@@ -17,7 +17,8 @@ import (
 // not cost a write per request, and a session idles out between 7 days
 // minus touchInterval and 7 days after its real last use.
 const (
-	sessionLifetime = 30 * 24 * time.Hour
+	// SessionLifetime is how long a session lasts, however often it is used.
+	SessionLifetime = 30 * 24 * time.Hour
 	sessionIdle     = 7 * 24 * time.Hour
 	touchInterval   = time.Hour
 )
@@ -47,7 +48,7 @@ func NewSessions(st *store.Store, now func() time.Time) *Sessions {
 func (s *Sessions) Start(ctx context.Context, accountID int64) (string, error) {
 	token := rand.Text()
 	now := s.now()
-	err := s.store.CreateSession(ctx, accountID, hashToken(token), now, now.Add(sessionLifetime))
+	err := s.store.CreateSession(ctx, accountID, hashToken(token), now, now.Add(SessionLifetime))
 	if err != nil {
 		return "", err
 	}

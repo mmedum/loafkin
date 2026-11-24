@@ -83,3 +83,24 @@ func TestErrorCodeReachesTheRequestsInfo(t *testing.T) {
 		t.Errorf("ErrorCode = %q after SetErrorCode on a copy of the request, want %q", info.ErrorCode, "some_code")
 	}
 }
+
+func TestFailAnswersWithGenericTextAndRecordsTheCode(t *testing.T) {
+	tests := []struct {
+		status   int
+		wantBody string
+	}{
+		{http.StatusForbidden, "Forbidden\n"},
+		{http.StatusNotFound, "Not Found\n"},
+		{http.StatusInternalServerError, "Something went wrong. Request id: req-1\n"},
+	}
+	for _, tt := range tests {
+		info := &route.Info{ID: "req-1"}
+		rec := httptest.NewRecorder()
+		route.Fail(rec, route.WithInfo(httptest.NewRequest(http.MethodGet, "/", nil), info), tt.status, "some_code")
+
+		if rec.Code != tt.status || rec.Body.String() != tt.wantBody || info.ErrorCode != "some_code" {
+			t.Errorf("Fail(%d): %d %q, code %q; want %d %q, code %q",
+				tt.status, rec.Code, rec.Body.String(), info.ErrorCode, tt.status, tt.wantBody, "some_code")
+		}
+	}
+}

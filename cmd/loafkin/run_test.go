@@ -157,7 +157,8 @@ func TestCrossOriginPostIsRefused(t *testing.T) {
 // TestPanicBeforeTheResponseDropsHandlerHeaders checks that the generic
 // 500 does not carry a cookie the handler set before it panicked.
 func TestPanicBeforeTheResponseDropsHandlerHeaders(t *testing.T) {
-	h := logRequests(slog.New(slog.DiscardHandler), securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var logs bytes.Buffer
+	h := logRequests(slog.New(slog.NewJSONHandler(&logs, nil)), securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Set-Cookie", "__Host-session=half-made")
 		panic("boom")
 	})))
@@ -171,6 +172,9 @@ func TestPanicBeforeTheResponseDropsHandlerHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("500 carries Referrer-Policy %q, want no-referrer", got)
+	}
+	if lines := logLines(t, &logs); len(lines) != 1 || lines[0]["error_code"] != "panic" {
+		t.Errorf("logged %v, want one line with error_code panic", lines)
 	}
 }
 
@@ -233,7 +237,7 @@ func TestRequestLogCarriesNoPathOrSecrets(t *testing.T) {
 		tt.handler.ServeHTTP(rec, req)
 
 		if strings.Contains(logs.String(), "canary") {
-			t.Errorf("GET %s: log carries a canary: %s", tt.target, logs.String())
+			t.Errorf("%s %s: log carries a canary: %s", tt.method, tt.target, logs.String())
 		}
 		lines := logLines(t, &logs)
 		if len(lines) != 1 || lines[0]["route"] != tt.wantRoute || lines[0]["status"] != tt.wantStatus {
@@ -241,7 +245,7 @@ func TestRequestLogCarriesNoPathOrSecrets(t *testing.T) {
 				tt.method, tt.target, lines, tt.wantRoute, tt.wantStatus)
 		}
 		if strings.Contains(rec.Body.String(), "canary") {
-			t.Errorf("GET %s: response carries a canary: %q", tt.target, rec.Body.String())
+			t.Errorf("%s %s: response carries a canary: %q", tt.method, tt.target, rec.Body.String())
 		}
 	}
 }

@@ -109,6 +109,22 @@ func SetErrorCode(r *http.Request, code string) {
 	InfoFrom(r).ErrorCode = code
 }
 
+// Fail records code for the request's log line and answers with the
+// generic text for status, so no error detail reaches the caller (D-33).
+func Fail(w http.ResponseWriter, r *http.Request, status int, code string) {
+	SetErrorCode(r, code)
+	var text string
+	switch status {
+	case http.StatusForbidden:
+		text = "Forbidden"
+	case http.StatusNotFound:
+		text = "Not Found"
+	default:
+		text = "Something went wrong. Request id: " + InfoFrom(r).ID
+	}
+	WriteText(w, status, text)
+}
+
 // WriteText answers with a plain-text body that no cache keeps.
 func WriteText(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

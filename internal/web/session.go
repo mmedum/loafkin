@@ -25,22 +25,21 @@ func MemberFrom(r *http.Request) domain.Member {
 
 // SetSessionCookie gives the browser the token of its new session.
 func SetSessionCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		MaxAge:   30 * 24 * 60 * 60,
-		Secure:   true,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	setSessionCookie(w, token, int(domain.SessionLifetime.Seconds()))
 }
 
 func clearSessionCookie(w http.ResponseWriter) {
+	setSessionCookie(w, "", -1)
+}
+
+// setSessionCookie sets or clears the cookie. A browser clears it only
+// when the attributes match the ones it was set with.
+func setSessionCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
+		Value:    value,
 		Path:     "/",
-		MaxAge:   -1,
+		MaxAge:   maxAge,
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -54,27 +53,23 @@ func RequireMember(sessions *domain.Sessions) route.Guard {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(sessionCookie)
 			if err != nil {
-				route.SetErrorCode(r, "signed_out")
-				route.WriteText(w, http.StatusNotFound, "Not Found")
+				route.Fail(w, r, http.StatusNotFound, "signed_out")
 				return
 			}
 			// CrossOriginProtection lets through a request that carries
 			// neither header, so a cookie alone may not change state (D-14).
 			if !safeMethod(r.Method) && r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Origin") == "" {
-				route.SetErrorCode(r, "cross_origin")
-				route.WriteText(w, http.StatusForbidden, "Forbidden")
+				route.Fail(w, r, http.StatusForbidden, "cross_origin")
 				return
 			}
 			m, err := sessions.Resume(r.Context(), cookie.Value)
 			if errors.Is(err, domain.ErrNoSession) {
 				clearSessionCookie(w)
-				route.SetErrorCode(r, "signed_out")
-				route.WriteText(w, http.StatusNotFound, "Not Found")
+				route.Fail(w, r, http.StatusNotFound, "signed_out")
 				return
 			}
 			if err != nil {
-				route.SetErrorCode(r, store.ErrorCode(err, "session_failed"))
-				route.WriteText(w, http.StatusInternalServerError, "Something went wrong. Request id: "+route.InfoFrom(r).ID)
+				route.Fail(w, r, http.StatusInternalServerError, store.ErrorCode(err, "session_failed"))
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), memberKey{}, m)))
@@ -94,8 +89,7 @@ func safeMethod(method string) bool {
 func Register(t *route.Table, sessions *domain.Sessions) {
 	t.HandleFunc("POST /sign-out", route.Member, func(w http.ResponseWriter, r *http.Request) {
 		if err := sessions.End(r.Context(), MemberFrom(r)); err != nil {
-			route.SetErrorCode(r, store.ErrorCode(err, "sign_out_failed"))
-			route.WriteText(w, http.StatusInternalServerError, "Something went wrong. Request id: "+route.InfoFrom(r).ID)
+			route.Fail(w, r, http.StatusInternalServerError, store.ErrorCode(err, "sign_out_failed"))
 			return
 		}
 		clearSessionCookie(w)

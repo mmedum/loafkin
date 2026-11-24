@@ -80,8 +80,7 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 	// default writes its own error text (D-33).
 	cop := http.NewCrossOriginProtection()
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route.SetErrorCode(r, "cross_origin")
-		route.WriteText(w, http.StatusForbidden, "Forbidden")
+		route.Fail(w, r, http.StatusForbidden, "cross_origin")
 	}))
 	return logRequests(logger, securityHeaders(cop.Handler(routes(st))))
 }
@@ -89,8 +88,7 @@ func newHandler(st *store.Store, logger *slog.Logger) http.Handler {
 // denyUndeclared answers a route with an undeclared permission like a
 // missing one (D-22, D-33).
 func denyUndeclared(w http.ResponseWriter, r *http.Request) {
-	route.SetErrorCode(r, "permission_undeclared")
-	route.WriteText(w, http.StatusNotFound, "Not Found")
+	route.Fail(w, r, http.StatusNotFound, "permission_undeclared")
 }
 
 // routes builds the table of every route loafkin serves.
@@ -150,7 +148,7 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		defer func() {
 			abort := false
 			if v := recover(); v != nil {
-				abort = answerPanic(sw, info, v)
+				abort = answerPanic(sw, r, v)
 			}
 			pattern := r.Pattern
 			if pattern == "" {
@@ -179,20 +177,20 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 // the handler set with a generic 500. After that, it reports that the
 // connection must be aborted, since the client already has part of a
 // response.
-func answerPanic(sw *statusWriter, info *route.Info, v any) (abort bool) {
+func answerPanic(sw *statusWriter, r *http.Request, v any) (abort bool) {
 	if v == http.ErrAbortHandler {
-		info.ErrorCode = "aborted"
+		route.SetErrorCode(r, "aborted")
 		return true
 	}
-	info.ErrorCode = "panic"
 	if sw.wroteHeader {
+		route.SetErrorCode(r, "panic")
 		return true
 	}
 	h := sw.Header()
 	clear(h)
 	setSecurityHeaders(h)
-	h.Set("X-Request-Id", info.ID)
-	route.WriteText(sw, http.StatusInternalServerError, "Something went wrong. Request id: "+info.ID)
+	h.Set("X-Request-Id", route.InfoFrom(r).ID)
+	route.Fail(sw, r, http.StatusInternalServerError, "panic")
 	return false
 }
 
