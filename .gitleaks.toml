@@ -1,0 +1,56 @@
+# Nothing secret or personal may enter this repository. The default rules
+# cover private keys (Apple's .p8 key is a PEM private key) and signed
+# JWTs (Apple's client secret is one). The rules below add the
+# credentials loafkin uses that the defaults do not name, and email
+# addresses, which are personal data.
+title = "loafkin"
+
+[extend]
+useDefault = true
+
+# Google OAuth client secrets carry the GOCSPX- prefix. The format comes
+# from secret scanners' documentation, not from Google; this rule matches
+# any length, so a longer format is still a finding.
+[[rules]]
+id = "google-oauth-client-secret"
+description = "A Google OAuth client secret, identified by its prefix"
+regex = '''\bGOCSPX-[0-9A-Za-z_\-]{20,}'''
+keywords = ["gocspx-"]
+
+[[rules]]
+id = "email-address"
+description = "An email address, which is personal data unless its domain is reserved"
+regex = '''[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}'''
+keywords = ["@"]
+
+# Database passwords live in a secret manager, never in a connection URL
+# the repository holds.
+[[rules]]
+id = "url-password"
+description = "A password in a connection URL"
+regex = '''[A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]+:([^\s:/@]{4,})@([^\s/:?#]+)'''
+secretGroup = 1
+keywords = ["://"]
+
+[[allowlists]]
+description = "Module checksums, reserved domains, service addresses and synthetic values"
+paths = [
+  '''(?:^|/)go\.sum$''',
+]
+# Allowed as literal values rather than by path, so a real credential in
+# the same file is still a finding. An inline `gitleaks:allow` does not
+# serve: the history scan reads every commit, and a comment clears only
+# the commit that carries it.
+regexTarget = "match"
+regexes = [
+  # RFC 2606 and RFC 6761 reserve these; they never resolve.
+  '''^[A-Za-z0-9._%+\-]+@(?:[A-Za-z0-9\-]+\.)*(?:example\.(?:com|net|org)|example|test|invalid|localhost)$''',
+  # Service addresses, not people: SSH remotes and co-author trailers.
+  '''^git@github\.com$''',
+  '''^[A-Za-z0-9._%+\-]+@users\.noreply\.github\.com$''',
+  '''^noreply@(?:github\.com|anthropic\.com)$''',
+  # A local development database, never a deployed one.
+  '''://[^\s:/@]+:[^\s:/@]+@(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:/|$)''',
+  # Synthetic Google secrets: the prefix followed by EXAMPLE, FAKE or TEST.
+  '''\bGOCSPX-(?:EXAMPLE|FAKE|TEST)[0-9A-Za-z_\-]*''',
+]

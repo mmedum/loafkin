@@ -1,0 +1,5 @@
+#!/bin/sh
+# Point git here once with `make hooks`. The leak scan runs at commit time
+# because a leak reaches the history the moment it is committed, and this
+# repository is public.
+exec make --no-print-directory leaks-staged

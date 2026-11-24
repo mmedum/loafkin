@@ -1,0 +1,57 @@
+# Never: a secret, an environment file or a downloaded credential.
+# Apple's Sign in with Apple key is an AuthKey_*.p8 file; Google's
+# OAuth client downloads as client_secret_*.json.
+.env
+.env.*
+.envrc
+.direnv/
+*.p8
+*.pem
+*.key
+*.p12
+client_secret*.json
+
+# Personal Claude Code files. Claude Code excludes settings.local.json
+# only through the global git excludes of the machine that created it.
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# Go build, test and profile output.
+/loafkin
+/bin/
+/dist/
+*.test
+*.out
+*.coverprofile
+coverage.html
+*.pprof
+__debug_bin*
+go.work
+go.work.sum
+
+# Local PostgreSQL data and dumps. Never *.sql: migrations are SQL.
+*.dump
+*.pgdump
+*.sql.gz
+/pgdata/
+
+# Browser-test screenshots, traces and logs.
+/test-output/
+*.log
+
+# Editor and tool scratch files. An editor's temp file reaches a public
+# repository through `git add -A` and is not visible at commit time.
+*.swp
+*.swo
+*~
+.#*
+\#*\#
+*.orig
+*.rej
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

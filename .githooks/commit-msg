@@ -1,0 +1,4 @@
+#!/bin/sh
+# A commit message is public for good too, and the pre-commit scan reads
+# only the staged diff, so the message gets its own scan.
+exec make --no-print-directory leaks-msg MSG="$1"
