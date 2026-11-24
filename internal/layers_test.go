@@ -10,7 +10,9 @@ import (
 )
 
 // The layers of D-20, from the top. Entry points share a rank, so none
-// may import another. A leaf is imported only by the command.
+// may import another. A leaf is imported only by the command's rank.
+// testdb shares that rank, so no package imports it; only tests do, and
+// this gate reads no test files.
 const (
 	rankStore = iota
 	rankDomain
@@ -31,6 +33,7 @@ var layers = map[string]int{
 	"route":      rankRoute,
 	"migrations": leaf,
 	"assets":     leaf,
+	"testdb":     rankCommand,
 }
 
 // layerOf names the layer of a loafkin.com import path, or "" for a path
@@ -61,7 +64,7 @@ func checkImport(from, to string) string {
 		return ""
 	}
 	if toRank == leaf {
-		if from == "command" {
+		if fromRank == rankCommand {
 			return ""
 		}
 		return from + " imports " + to + ", which only the command may import"
@@ -91,6 +94,9 @@ func TestCheckImport(t *testing.T) {
 		{"web", "command", false},
 		{"web", "unknown", false},
 		{"command", "route", true},
+		{"testdb", "migrations", true},
+		{"command", "testdb", false},
+		{"store", "testdb", false},
 		{"web", "route", true},
 		{"domain", "route", false},
 		{"store", "route", false},
