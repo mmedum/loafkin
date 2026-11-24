@@ -45,9 +45,10 @@ License 2.0 (D-05), and everything committed stays public for good.
    `make leaks` and the hooks hold it. A test value uses the synthetic
    forms `.gitleaks.toml` allows. The gitleaks version is pinned in the
    `Makefile` and nowhere else.
-2. **Prepare each change in the working tree, and leave committing,
-   pushing, tagging and merging to the owner**, who merges every pull
-   request (D-40).
+2. **Commit and push only on a branch, open a pull request, and leave
+   merging and tagging to the owner** (D-46). Every change reaches
+   `main` through a pull request, because the owner reads everything
+   before it enters `main`.
 3. **Keep personal data in the EU**: every host, email sender and script
    that touches it runs in the EU, and pages load nothing from a CDN
    (D-07).

@@ -26,7 +26,8 @@ never goes in an issue or a pull request:
 - A changed decision is a new entry that supersedes the old one, never
   an edit that hides it. IDs are never reused: take the next one from
   the `Next ID:` line.
-- Every change reaches `main` through a pull request (D-40).
+- Every change reaches `main` through a pull request that the owner
+  merges (D-46).
 
 ## Commit messages
 
