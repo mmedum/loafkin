@@ -629,8 +629,10 @@ Packages are sliced by layer under `internal/`. From the top: the
 command; the entry points, which are the page handlers, the API
 handlers, the live updates and the workers; the domain; and the store.
 The migrations and the browser assets are leaves only the command
-imports. A layer imports only layers below it, entry points never import
-each other, and a gate fails on an import the other way.
+imports. The route table (D-22) sits between the entry points and
+the domain, because it depends on `net/http`. A layer imports only layers
+below it, entry points never import each other, and a gate fails on an
+import the other way.
 [Gitea's backend guidelines](https://github.com/go-gitea/gitea/blob/eb3bc196ec00efd184b663dead91ca89ca2ee0c3/docs/guidelines-backend.md)
 state the same one-way rule. Go's
 [`internal` directory](https://pkg.go.dev/cmd/go#hdr-Internal_packages),

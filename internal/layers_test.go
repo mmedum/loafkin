@@ -14,6 +14,7 @@ import (
 const (
 	rankStore = iota
 	rankDomain
+	rankRoute
 	rankEntry
 	rankCommand
 	leaf = -1
@@ -27,6 +28,7 @@ var layers = map[string]int{
 	"worker":     rankEntry,
 	"domain":     rankDomain,
 	"store":      rankStore,
+	"route":      rankRoute,
 	"migrations": leaf,
 	"assets":     leaf,
 }
@@ -88,6 +90,12 @@ func TestCheckImport(t *testing.T) {
 		{"migrations", "store", false},
 		{"web", "command", false},
 		{"web", "unknown", false},
+		{"command", "route", true},
+		{"web", "route", true},
+		{"domain", "route", false},
+		{"store", "route", false},
+		{"route", "domain", true},
+		{"route", "web", false},
 		{"unknown", "store", false},
 	}
 	for _, tt := range tests {
@@ -129,8 +137,8 @@ func TestImportDirection(t *testing.T) {
 			t.Fatalf("walking %s: %v", root, err)
 		}
 	}
-	// cmd/loafkin, internal/store and internal/migrations at least.
-	if packages < 3 {
-		t.Errorf("read %d packages, want at least 3", packages)
+	// cmd/loafkin, internal/route, internal/store and internal/migrations at least.
+	if packages < 4 {
+		t.Errorf("read %d packages, want at least 4", packages)
 	}
 }
