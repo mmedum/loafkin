@@ -3,6 +3,7 @@ package route_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"loafkin.com/internal/route"
@@ -55,12 +56,7 @@ func TestRoutesListsEveryRegistration(t *testing.T) {
 		{Pattern: "GET /a", Permission: route.Public},
 		{Pattern: "POST /b", Permission: 0},
 	}
-	if len(got) != len(want) {
-		t.Fatalf("Routes() = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("Routes()[%d] = %v, want %v", i, got[i], want[i])
-		}
+	if !slices.Equal(got, want) {
+		t.Errorf("Routes() = %v, want %v", got, want)
 	}
 }
