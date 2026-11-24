@@ -1,10 +1,19 @@
 # gitleaks runs from its module at one pinned version, never from PATH.
 # The hooks and CI call these targets, so this is the only pin.
+# govulncheck is a tool in go.mod, where Dependabot bumps it.
 GITLEAKS := github.com/zricethezav/gitleaks/v8@v8.30.1
 GITLEAKS_FLAGS := --config .gitleaks.toml --redact --verbose --no-banner
 
-.PHONY: hooks leaks leaks-staged leaks-msg
-.DEFAULT_GOAL := leaks
+.PHONY: check hooks leaks leaks-staged leaks-msg
+.DEFAULT_GOAL := check
+
+# Database tests run against the scratch PostgreSQL that
+# LOAFKIN_TEST_DATABASE_URL names, and skip without one.
+check: ## gofmt, go vet, the tests and govulncheck, as CI runs them
+	@out=$$(gofmt -l .); test -z "$$out" || { echo "$$out" >&2; echo "check: run gofmt -w ." >&2; exit 1; }
+	go vet ./...
+	go test -race -shuffle=on ./...
+	go tool govulncheck ./...
 
 hooks: ## Point git at .githooks, once per clone
 	git config core.hooksPath .githooks

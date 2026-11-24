@@ -12,6 +12,9 @@ License 2.0 (D-05), and everything committed stays public for good.
 - `make hooks`, once per clone, points git at `.githooks`. Its
   pre-commit hook runs `make leaks-staged` on the staged changes, and
   its commit-msg hook runs `make leaks-msg` on the message.
+- `make check` runs gofmt, go vet, the tests and govulncheck, as CI
+  does. Database tests skip unless `LOAFKIN_TEST_DATABASE_URL` names a
+  scratch PostgreSQL.
 - `make leaks` runs gitleaks over the working tree, the full history and
   every commit message, as CI does.
 
@@ -84,6 +87,7 @@ License 2.0 (D-05), and everything committed stays public for good.
 
 ## Definition of done
 
+- `make check` passes with `LOAFKIN_TEST_DATABASE_URL` set.
 - `make leaks` passes.
 - A user-visible change, the JSON API included, has one line under
   `[Unreleased]` in `CHANGELOG.md`.
