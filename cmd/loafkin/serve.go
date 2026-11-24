@@ -152,12 +152,12 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 			if v := recover(); v != nil {
 				abort = answerPanic(sw, info, v)
 			}
-			route := r.Pattern
-			if route == "" {
-				route = "unmatched"
+			pattern := r.Pattern
+			if pattern == "" {
+				pattern = "unmatched"
 			}
 			attrs := []any{
-				"route", route,
+				"route", pattern,
 				"status", sw.status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", info.ID,

@@ -14,7 +14,8 @@ import (
 
 // D-13: a session lasts 30 days, or ends after 7 days unused. The last
 // use is written at most once per touchInterval, so a busy member does
-// not cost a write per request.
+// not cost a write per request, and a session idles out between 7 days
+// minus touchInterval and 7 days after its real last use.
 const (
 	sessionLifetime = 30 * 24 * time.Hour
 	sessionIdle     = 7 * 24 * time.Hour
