@@ -2,9 +2,11 @@ package worker_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -22,27 +24,24 @@ var now = time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
 
 type sent struct{ to, subject, body string }
 
-// fakeSender records what it sends, and fails for recipients in failFor
-// with err, or a plain error when err is nil. During runs before the send.
+// fakeSender records the key of every try and what it sends, and fails
+// for recipients in failFor with err, or a plain error when err is nil.
+// During runs before the send.
 type fakeSender struct {
 	mu      sync.Mutex
 	sent    []sent
-	tried   int
 	keys    []int64
 	failFor map[string]bool
 	err     error
-	delay   time.Duration
 	during  func()
 }
 
 func (f *fakeSender) Send(ctx context.Context, key int64, to, subject, body string) error {
-	time.Sleep(f.delay)
 	if f.during != nil {
 		f.during()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.tried++
 	f.keys = append(f.keys, key)
 	if f.failFor[to] {
 		if f.err != nil {
@@ -57,9 +56,8 @@ func (f *fakeSender) Send(ctx context.Context, key int64, to, subject, body stri
 // refusal is a sender error that says whether a retry can succeed.
 type refusal bool
 
-func (r refusal) Error() string     { return "refused" }
-func (r refusal) ErrorCode() string { return "test_refused" }
-func (r refusal) Permanent() bool   { return bool(r) }
+func (r refusal) Error() string   { return "refused" }
+func (r refusal) Permanent() bool { return bool(r) }
 
 // emptyOutbox gives the test the outbox to itself; no other package's
 // tests write to it.
@@ -96,26 +94,22 @@ func newWorker(st *store.Store, sender worker.Sender) *worker.Worker {
 	}
 }
 
-func outboxRows(t *testing.T, pool *pgxpool.Pool) map[string]struct {
+type outboxRow struct {
 	attempts int
 	next     time.Time
-} {
+}
+
+func outboxRows(t *testing.T, pool *pgxpool.Pool) map[string]outboxRow {
 	t.Helper()
 	rows, err := pool.Query(t.Context(), `SELECT recipient, attempts, next_attempt_at FROM outbox`)
 	if err != nil {
 		t.Fatalf("reading the outbox: %v", err)
 	}
 	defer rows.Close()
-	got := map[string]struct {
-		attempts int
-		next     time.Time
-	}{}
+	got := map[string]outboxRow{}
 	for rows.Next() {
 		var to string
-		var r struct {
-			attempts int
-			next     time.Time
-		}
+		var r outboxRow
 		if err := rows.Scan(&to, &r.attempts, &r.next); err != nil {
 			t.Fatalf("scanning the outbox: %v", err)
 		}
@@ -138,7 +132,7 @@ func TestSendDueSendsAndDeletesOnlyDueEmails(t *testing.T) {
 	newWorker(st, sender).SendDue(t.Context())
 
 	want := []sent{{"due@example.com", "Subject for due@example.com", "Body\nfor due@example.com"}}
-	if fmt.Sprint(sender.sent) != fmt.Sprint(want) {
+	if !slices.Equal(sender.sent, want) {
 		t.Errorf("sent %v, want %v", sender.sent, want)
 	}
 	if len(sender.keys) != 1 || sender.keys[0] != dueID {
@@ -173,7 +167,7 @@ func TestTwoWorkersSendEachEmailOnce(t *testing.T) {
 	for i := range emails {
 		enqueue(t, st, fmt.Sprintf("member%d@example.com", i), now, now.Add(time.Hour))
 	}
-	sender := &fakeSender{delay: 5 * time.Millisecond}
+	sender := &fakeSender{during: func() { time.Sleep(5 * time.Millisecond) }}
 
 	var wg sync.WaitGroup
 	for range 2 {
@@ -198,25 +192,22 @@ func TestTwoWorkersSendEachEmailOnce(t *testing.T) {
 func TestSweepDeletesExpiredSessionsAndEmails(t *testing.T) {
 	pool, st := emptyOutbox(t)
 	account := testdb.NewAccount(t, pool)
-	insert := func(created, lastUsed, expires time.Time) {
+	insert := func(lastUsed, expires time.Time) {
 		t.Helper()
-		_, err := pool.Exec(t.Context(), `
-			INSERT INTO sessions (account_id, token_hash, created_at, last_used_at, expires_at)
-			VALUES ($1, sha256(gen_random_uuid()::text::bytea), $2, $3, $4)`, account, created, lastUsed, expires)
-		if err != nil {
+		hash := make([]byte, 32)
+		_, _ = rand.Read(hash)
+		if err := st.CreateSession(t.Context(), account, hash, lastUsed, expires); err != nil {
 			t.Fatalf("inserting a session: %v", err)
 		}
 	}
 	day := 24 * time.Hour
-	insert(now.Add(-day), now.Add(-time.Minute), now.Add(29*day)) // live
-	insert(now.Add(-8*day), now.Add(-7*day), now.Add(22*day))     // idle 7 days
-	insert(now.Add(-30*day), now.Add(-time.Minute), now)          // at its end
+	insert(now.Add(-time.Minute), now.Add(29*day)) // live
+	insert(now.Add(-7*day), now.Add(22*day))       // idle 7 days
+	insert(now.Add(-time.Minute), now)             // at its end
 	enqueue(t, st, "live@example.com", now, now.Add(time.Second))
 	enqueue(t, st, "expired@example.com", now.Add(-time.Hour), now)
 
-	if err := newWorker(st, &fakeSender{}).Sessions.DeleteExpired(t.Context()); err != nil {
-		t.Fatalf("DeleteExpired: %v", err)
-	}
+	newWorker(st, &fakeSender{}).DeleteExpired(t.Context())
 
 	var sessions int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM sessions WHERE account_id = $1`, account).Scan(&sessions); err != nil {
@@ -242,8 +233,8 @@ func TestSlowFailureWaitsFromTheEndOfTheSend(t *testing.T) {
 	w.SendDue(t.Context())
 
 	want := now.Add(40 * time.Second)
-	if r := outboxRows(t, pool)["slow@example.com"]; sender.tried != 1 || !r.next.Equal(want) {
-		t.Errorf("tried %d times, next at %v; want 1 try, next at %v", sender.tried, r.next, want)
+	if r := outboxRows(t, pool)["slow@example.com"]; len(sender.keys) != 1 || !r.next.Equal(want) {
+		t.Errorf("tried %d times, next at %v; want 1 try, next at %v", len(sender.keys), r.next, want)
 	}
 }
 
@@ -264,8 +255,8 @@ func TestPermanentRefusalDropsTheEmail(t *testing.T) {
 
 			newWorker(st, sender).SendDue(t.Context())
 
-			if rows := outboxRows(t, pool); sender.tried != 1 || len(rows) != tt.wantRows {
-				t.Errorf("tried %d times, outbox %v; want 1 try and %d rows", sender.tried, rows, tt.wantRows)
+			if rows := outboxRows(t, pool); len(sender.keys) != 1 || len(rows) != tt.wantRows {
+				t.Errorf("tried %d times, outbox %v; want 1 try and %d rows", len(sender.keys), rows, tt.wantRows)
 			}
 		})
 	}

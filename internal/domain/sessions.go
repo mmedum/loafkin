@@ -79,11 +79,11 @@ func (s *Sessions) End(ctx context.Context, m Member) error {
 	return s.store.DeleteSession(ctx, m.AccountID, m.sessionID)
 }
 
-// DeleteExpired removes every session past its end or idle limit, and
-// every email past its expiry, as the system identity (D-21).
+// DeleteExpired removes every session past its end or idle limit, as the
+// system identity (D-21).
 func (s *Sessions) DeleteExpired(ctx context.Context) error {
 	now := s.now()
-	return s.store.DeleteExpired(ctx, now, now.Add(-sessionIdle))
+	return s.store.DeleteExpiredSessions(ctx, now, now.Add(-sessionIdle))
 }
 
 func hashToken(token string) []byte {

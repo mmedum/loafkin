@@ -47,13 +47,12 @@ var ErrNoEmail = errors.New("store: no email due")
 // even after ctx is canceled, so a shutdown cannot undo a delivery.
 const afterSendTimeout = 5 * time.Second
 
-// SendNextEmail claims one due email and passes it to send, as the
+// SendNextEmail claims one due email and passes it to attempt, as the
 // system identity background work runs as (D-21). The row stays locked
-// while send runs, so another worker skips it. It is deleted when send
-// succeeds. When send fails, retry decides: the attempt is counted and
-// the next one waits until the time retry returns, or, when retry
-// returns false, the row is deleted. SendNextEmail returns send's error.
-func (s *Store) SendNextEmail(ctx context.Context, now time.Time, send func(Email) error, retry func(attempts int, sendErr error) (time.Time, bool)) error {
+// while attempt runs, so another worker skips it. When attempt returns
+// retry, the attempt is counted and the next one waits until retryAt;
+// otherwise the row is deleted. The error is only ever the database's.
+func (s *Store) SendNextEmail(ctx context.Context, now time.Time, attempt func(Email) (retryAt time.Time, retry bool)) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -75,13 +74,7 @@ func (s *Store) SendNextEmail(ctx context.Context, now time.Time, send func(Emai
 	if err != nil {
 		return err
 	}
-	sendErr := send(e)
-	var at time.Time
-	retrying := false
-	if sendErr != nil {
-		at, retrying = retry(e.Attempts+1, sendErr)
-	}
-	if retrying {
+	if at, retry := attempt(e); retry {
 		_, err = tx.Exec(after, `UPDATE outbox SET attempts = attempts + 1, next_attempt_at = $2 WHERE id = $1`, e.ID, at)
 	} else {
 		_, err = tx.Exec(after, `DELETE FROM outbox WHERE id = $1`, e.ID)
@@ -89,21 +82,12 @@ func (s *Store) SendNextEmail(ctx context.Context, now time.Time, send func(Emai
 	if err != nil {
 		return err
 	}
-	if err := tx.Commit(after); err != nil {
-		return err
-	}
-	return sendErr
+	return tx.Commit(after)
 }
 
-// DeleteExpired removes the sessions and emails that can no longer be
-// used: sessions past their end or idle since idleSince, and emails past
-// their expiry. It runs as the system identity (D-21).
-func (s *Store) DeleteExpired(ctx context.Context, now, idleSince time.Time) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= $1 OR last_used_at <= $2`, now, idleSince); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `DELETE FROM outbox WHERE expires_at <= $1`, now)
-		return err
-	})
+// DeleteExpiredEmails removes the emails past their expiry, as the
+// system identity (D-21).
+func (s *Store) DeleteExpiredEmails(ctx context.Context, now time.Time) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM outbox WHERE expires_at <= $1`, now)
+	return err
 }

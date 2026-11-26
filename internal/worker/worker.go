@@ -14,7 +14,8 @@ import (
 
 // Sender delivers one email. The key is the same for every attempt at
 // one email, so a sender that takes an idempotency key sends it once
-// (D-29).
+// (D-29). A send error with an ErrorCode method is logged by that code,
+// and one whose Permanent method reports true deletes the email.
 type Sender interface {
 	Send(ctx context.Context, key int64, to, subject, body string) error
 }
@@ -44,7 +45,7 @@ func (w *Worker) Run(ctx context.Context) {
 	defer poll.Stop()
 	sweep := time.NewTicker(w.Sweep)
 	defer sweep.Stop()
-	w.sweep(ctx)
+	w.DeleteExpired(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -52,13 +53,13 @@ func (w *Worker) Run(ctx context.Context) {
 		case <-poll.C:
 			w.SendDue(ctx)
 		case <-sweep.C:
-			w.sweep(ctx)
+			w.DeleteExpired(ctx)
 		}
 	}
 }
 
-// sendsPerPoll bounds one SendDue, so a row that is sent but never
-// deleted cannot keep the worker in one loop.
+// sendsPerPoll bounds one SendDue, so a long outbox cannot keep the
+// worker from its sweep.
 const sendsPerPoll = 100
 
 // SendDue sends the emails that are due, one at a time, up to
@@ -68,24 +69,23 @@ func (w *Worker) SendDue(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		var sendErr error
-		err := w.Store.SendNextEmail(ctx, w.Now(), func(e store.Email) error {
-			sendErr = w.Sender.Send(ctx, e.ID, e.Recipient, e.Subject, e.Body)
-			return sendErr
-		}, func(attempts int, err error) (time.Time, bool) {
+		err := w.Store.SendNextEmail(ctx, w.Now(), func(e store.Email) (time.Time, bool) {
+			err := w.Sender.Send(ctx, e.ID, e.Recipient, e.Subject, e.Body)
+			if err == nil {
+				return time.Time{}, false
+			}
+			// One email failed; the next may not.
+			w.Logger.Info("email not sent", "error_code", errorCode(err, "send_failed"))
 			if p, ok := errors.AsType[permanent](err); ok && p.Permanent() {
 				return time.Time{}, false
 			}
 			// Read after the send, which can take longer than a retry delay.
-			return w.Now().Add(retryDelay(attempts)), true
+			return w.Now().Add(retryDelay(e.Attempts + 1)), true
 		})
-		switch {
-		case errors.Is(err, store.ErrNoEmail):
+		if errors.Is(err, store.ErrNoEmail) {
 			return
-		case sendErr != nil && err == sendErr:
-			// One email failed; the next may not.
-			w.Logger.Info("email not sent", "error_code", errorCode(err, "send_failed"))
-		case err != nil:
+		}
+		if err != nil {
 			// A shutdown cancels ctx in the middle of a claim; that is no fault.
 			if ctx.Err() == nil {
 				w.Logger.Info("outbox failed", "error_code", errorCode(err, "outbox_failed"))
@@ -95,8 +95,12 @@ func (w *Worker) SendDue(ctx context.Context) {
 	}
 }
 
-func (w *Worker) sweep(ctx context.Context) {
+// DeleteExpired removes the expired sessions and emails.
+func (w *Worker) DeleteExpired(ctx context.Context) {
 	if err := w.Sessions.DeleteExpired(ctx); err != nil && ctx.Err() == nil {
+		w.Logger.Info("sweep failed", "error_code", errorCode(err, "sweep_failed"))
+	}
+	if err := w.Store.DeleteExpiredEmails(ctx, w.Now()); err != nil && ctx.Err() == nil {
 		w.Logger.Info("sweep failed", "error_code", errorCode(err, "sweep_failed"))
 	}
 }

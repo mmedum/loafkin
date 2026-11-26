@@ -17,12 +17,8 @@ CREATE TABLE outbox (
 
 CREATE INDEX outbox_next_attempt_at ON outbox (next_attempt_at);
 CREATE INDEX outbox_account_id ON outbox (account_id);
-CREATE INDEX sessions_expires_at ON sessions (expires_at);
-CREATE INDEX sessions_last_used_at ON sessions (last_used_at);
 
 -- +goose Down
 SET LOCAL lock_timeout = '5s';
 
-DROP INDEX sessions_last_used_at;
-DROP INDEX sessions_expires_at;
 DROP TABLE outbox;

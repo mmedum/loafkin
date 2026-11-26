@@ -58,3 +58,10 @@ func (s *Store) DeleteSession(ctx context.Context, accountID, sessionID int64) e
 		accountID, sessionID)
 	return err
 }
+
+// DeleteExpiredSessions removes the sessions past their end or idle since
+// idleSince, as the system identity (D-21).
+func (s *Store) DeleteExpiredSessions(ctx context.Context, now, idleSince time.Time) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= $1 OR last_used_at <= $2`, now, idleSince)
+	return err
+}
