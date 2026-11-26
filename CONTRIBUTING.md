@@ -17,11 +17,12 @@ never goes in an issue or a pull request:
 ## Running locally
 
 - `make run` serves from source on `127.0.0.1:8080`. It first starts a
-  local PostgreSQL from `compose.yaml` with `make db`, and the server
-  applies the migrations at startup (D-25).
+  local PostgreSQL and Mailpit from `compose.yaml` with `make db`, and
+  the server applies the migrations at startup (D-25). Every email the
+  server sends lands in Mailpit, on `http://127.0.0.1:8025`.
 - `make run-image` builds the production image from the `Dockerfile`
   and serves it on the same address, against the same database.
-- `make db-stop` removes the database and its data.
+- `make db-stop` removes the database, Mailpit and their data.
 
 ## Before a pull request
 

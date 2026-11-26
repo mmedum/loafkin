@@ -17,7 +17,7 @@ without a password (D-10) and see only the groups they belong to
 | API client ↔ loafkin | HTTPS, with a personal token | Untrusted. A token acts for one member, is stored only as a hash and expires (D-15). |
 | loafkin ↔ PostgreSQL | The host's network | The store, the migrations and the live-update listener are the only code that talks to the database. Every store method takes a caller, a member or the system identity background work runs as, and is scoped to it (D-21). |
 | loafkin ↔ Google and Apple | OpenID Connect over HTTPS | An ID token counts only after its signature, issuer, audience and nonce check out (D-11). |
-| loafkin ↔ the email sender | HTTPS | It receives an address and a sign-in code or a join notice, and it sends from the EU (D-07). The member's own mailbox is outside loafkin's control. |
+| loafkin ↔ the email sender | SMTP over TLS (D-47) | It receives an address and a sign-in code or a join notice, and it sends from the EU (D-07). The member's own mailbox is outside loafkin's control. |
 | One member ↔ another | Item text, notes and photos | Written by other people. Templates escape all text (D-18), and the server re-encodes every photo (D-30). |
 | loafkin ↔ the phone | The service worker's cache and IndexedDB | The last list and any queued "bought" stay on the device until sign-out (D-28). |
 

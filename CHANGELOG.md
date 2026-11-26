@@ -10,4 +10,8 @@ lines are not part of it.
 
 ## [Unreleased]
 
+### Added
+
+- `serve` sends email over SMTP with TLS and needs `LOAFKIN_SMTP_ADDR` and `LOAFKIN_MAIL_FROM` to start.
+
 [Unreleased]: https://github.com/mmedum/loafkin/commits/main

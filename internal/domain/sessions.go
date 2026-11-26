@@ -79,6 +79,13 @@ func (s *Sessions) End(ctx context.Context, m Member) error {
 	return s.store.DeleteSession(ctx, m.AccountID, m.sessionID)
 }
 
+// DeleteExpired removes every session past its end or idle limit, as the
+// system identity (D-21).
+func (s *Sessions) DeleteExpired(ctx context.Context) error {
+	now := s.now()
+	return s.store.DeleteExpiredSessions(ctx, now, now.Add(-sessionIdle))
+}
+
 func hashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]

@@ -1,5 +1,7 @@
 # Local development only. The database trusts every connection, keeps
 # no volume and listens on loopback; `make db-stop` deletes its data.
+# Mailpit catches every email loafkin sends; read them on
+# http://127.0.0.1:8025.
 name: loafkin
 services:
   db:
@@ -15,6 +17,12 @@ services:
       timeout: 3s
       retries: 30
 
+  mailpit:
+    image: docker.io/axllent/mailpit:v1.33.1@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
   # The production image, started by `make run-image`.
   app:
     profiles: [image]
@@ -22,8 +30,13 @@ services:
     image: loafkin:dev
     environment:
       LOAFKIN_DATABASE_URL: postgres://loafkin@db:5432/loafkin?sslmode=disable
+      LOAFKIN_SMTP_ADDR: mailpit:1025
+      LOAFKIN_SMTP_TLS: none
+      LOAFKIN_MAIL_FROM: loafkin@example.com
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started

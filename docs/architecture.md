@@ -226,6 +226,7 @@ and what holds it are recorded; the entry holds the reasoning.
 | D-44 | A Google or Apple identity is keyed on its issuer and subject, never an email address, and is linked only from a signed-in session after a fresh sign-in | accepted | review |
 | D-45 | Remove and clear wait for the Undo bar to close, so undoing them sends nothing | accepted | review |
 | D-46 | An agent commits and pushes only on a branch and opens a pull request; only the owner merges or tags | accepted | `main` ruleset, review |
+| D-47 | Email leaves over SMTP with TLS until the email provider is chosen, then through its HTTP API | accepted | mail tests, review |
 
 ### D-01 The product, its domain and its repository are all named loafkin
 
@@ -655,8 +656,10 @@ code that talks to the database. Every store method takes the caller,
 a member or the system identity background work runs as, and returns
 only what that caller may see, as
 [Miniflux's storage](https://github.com/miniflux/v2/blob/f654f7c7675e5c4cbd6ef5bb5858aa8d9bdf2af1/internal/storage/category.go#L48)
-takes the user id. Public ids are random, never row ids, so an id tells
-nothing about other rows. The JSON API stays stable while pages change freely,
+takes the user id. A method that runs as the system identity takes no
+caller argument, and its comment says so, because a type that stands
+for the system would guard nothing. Public ids are random, never row
+ids, so an id tells nothing about other rows. The JSON API stays stable while pages change freely,
 as
 [htmx argues](https://htmx.org/essays/why-tend-not-to-use-content-negotiation/).
 
@@ -826,9 +829,11 @@ Email goes through an outbox table: a row is saved in the same
 transaction as the change that causes it, and a worker sends it with
 retries. The worker claims rows with `SKIP LOCKED`, so two instances
 never claim the same row. Sending is at least once: a worker that sends
-and then fails before it commits sends that email again. The row's id
-goes to the sender as an idempotency key where the sender takes one. A
-row is deleted once sent, once its code expires, or with its account.
+and then fails before it commits sends that email again. A shutdown
+does not cancel the commit after a send. The row's id goes to the sender
+as an idempotency key where the sender takes one. A row is deleted once
+sent, once its code expires, with its account, or when the mail server
+refuses that message for good, so a refused address is not sent again.
 
 One package owns the shutdown order: stop accepting requests, end the
 live streams, stop the workers, then close the database pool.
@@ -1158,4 +1163,22 @@ Cost: a pushed branch is public at once, so a leak in a branch commit
 is published before review. The commit hooks and the CI history scan
 stay the guard (D-39).
 
-Next ID: D-47
+### D-47 Email leaves over SMTP with TLS until the email provider is chosen, then through its HTTP API
+
+The worker hands each email from the outbox (D-29) to an SMTP server.
+TLS is implicit by default, or STARTTLS, which fails when the server
+does not offer it. Only an explicit `LOAFKIN_SMTP_TLS=none` sends in the
+clear, for the Mailpit catcher in `compose.yaml`. Every transactional
+provider in the EU accepts SMTP, so sign-in can be built and tested
+before the provider is chosen. Once it is, its HTTP API replaces SMTP
+behind the same one-method sender, and the outbox and worker stay as
+they are. An SMTP reply becomes a code such as `smtp_550`, never its
+text, because replies can echo addresses (D-33).
+
+Rejected: a provider's HTTP API first, which waits for the provider
+choice. A provider-neutral HTTP layer, which no two providers share.
+Cost: SMTP takes no idempotency key, so a worker that fails after a send
+sends that email again. Until the HTTP API arrives, a delivery failure
+is known only from the SMTP reply code.
+
+Next ID: D-48
