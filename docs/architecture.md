@@ -656,8 +656,10 @@ code that talks to the database. Every store method takes the caller,
 a member or the system identity background work runs as, and returns
 only what that caller may see, as
 [Miniflux's storage](https://github.com/miniflux/v2/blob/f654f7c7675e5c4cbd6ef5bb5858aa8d9bdf2af1/internal/storage/category.go#L48)
-takes the user id. Public ids are random, never row ids, so an id tells
-nothing about other rows. The JSON API stays stable while pages change freely,
+takes the user id. A method that runs as the system identity takes no
+caller argument, and its comment says so, because a type that stands
+for the system would guard nothing. Public ids are random, never row
+ids, so an id tells nothing about other rows. The JSON API stays stable while pages change freely,
 as
 [htmx argues](https://htmx.org/essays/why-tend-not-to-use-content-negotiation/).
 
@@ -827,9 +829,11 @@ Email goes through an outbox table: a row is saved in the same
 transaction as the change that causes it, and a worker sends it with
 retries. The worker claims rows with `SKIP LOCKED`, so two instances
 never claim the same row. Sending is at least once: a worker that sends
-and then fails before it commits sends that email again. The row's id
-goes to the sender as an idempotency key where the sender takes one. A
-row is deleted once sent, once its code expires, or with its account.
+and then fails before it commits sends that email again. A shutdown
+does not cancel the commit after a send. The row's id goes to the sender
+as an idempotency key where the sender takes one. A row is deleted once
+sent, once its code expires, with its account, or when the mail server
+refuses that message for good, so a refused address is not sent again.
 
 One package owns the shutdown order: stop accepting requests, end the
 live streams, stop the workers, then close the database pool.

@@ -12,13 +12,15 @@ import (
 	"loafkin.com/internal/store"
 )
 
-// Sender delivers one email.
+// Sender delivers one email. The key is the same for every attempt at
+// one email, so a sender that takes an idempotency key sends it once
+// (D-29).
 type Sender interface {
-	Send(ctx context.Context, to, subject, body string) error
+	Send(ctx context.Context, key int64, to, subject, body string) error
 }
 
 // A failed send waits retryFirst, doubling each time up to retryMax,
-// until the email expires.
+// until the email expires or the sender refuses it for good.
 const (
 	retryFirst = 10 * time.Second
 	retryMax   = 10 * time.Minute
@@ -66,22 +68,28 @@ func (w *Worker) SendDue(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		now := w.Now()
 		var sendErr error
-		err := w.Store.SendNextEmail(ctx, now, func(e store.Email) error {
-			sendErr = w.Sender.Send(ctx, e.Recipient, e.Subject, e.Body)
+		err := w.Store.SendNextEmail(ctx, w.Now(), func(e store.Email) error {
+			sendErr = w.Sender.Send(ctx, e.ID, e.Recipient, e.Subject, e.Body)
 			return sendErr
-		}, func(attempts int) time.Time {
-			return now.Add(retryDelay(attempts))
+		}, func(attempts int, err error) (time.Time, bool) {
+			if p, ok := errors.AsType[permanent](err); ok && p.Permanent() {
+				return time.Time{}, false
+			}
+			// Read after the send, which can take longer than a retry delay.
+			return w.Now().Add(retryDelay(attempts)), true
 		})
 		switch {
 		case errors.Is(err, store.ErrNoEmail):
 			return
 		case sendErr != nil && err == sendErr:
 			// One email failed; the next may not.
-			w.Logger.Info("email not sent", "error_code", errorCode(err))
+			w.Logger.Info("email not sent", "error_code", errorCode(err, "send_failed"))
 		case err != nil:
-			w.Logger.Info("outbox failed", "error_code", errorCode(err))
+			// A shutdown cancels ctx in the middle of a claim; that is no fault.
+			if ctx.Err() == nil {
+				w.Logger.Info("outbox failed", "error_code", errorCode(err, "outbox_failed"))
+			}
 			return
 		}
 	}
@@ -89,7 +97,7 @@ func (w *Worker) SendDue(ctx context.Context) {
 
 func (w *Worker) sweep(ctx context.Context) {
 	if err := w.Sessions.DeleteExpired(ctx); err != nil && ctx.Err() == nil {
-		w.Logger.Info("sweep failed", "error_code", errorCode(err))
+		w.Logger.Info("sweep failed", "error_code", errorCode(err, "sweep_failed"))
 	}
 }
 
@@ -111,9 +119,16 @@ type coded interface {
 	ErrorCode() string
 }
 
-func errorCode(err error) string {
+// permanent is an error from the sender that says whether a retry can
+// succeed.
+type permanent interface {
+	error
+	Permanent() bool
+}
+
+func errorCode(err error, fallback string) string {
 	if c, ok := errors.AsType[coded](err); ok {
 		return c.ErrorCode()
 	}
-	return store.ErrorCode(err, "send_failed")
+	return store.ErrorCode(err, fallback)
 }

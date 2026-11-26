@@ -61,26 +61,42 @@ type SMTP struct {
 // Error carries a code that is safe to log. SMTP replies and dial errors
 // can echo addresses, so their text never reaches a log (D-33).
 type Error struct {
-	code string
-	err  error
+	code      string
+	err       error
+	permanent bool
 }
 
 func (e *Error) Error() string     { return "mail: " + e.code }
 func (e *Error) Unwrap() error     { return e.err }
 func (e *Error) ErrorCode() string { return e.code }
 
-func fail(code string, err error) error {
+// Permanent reports that sending this message again cannot succeed.
+func (e *Error) Permanent() bool { return e.permanent }
+
+func fail(code string, err error) *Error {
 	if reply, ok := errors.AsType[*textproto.Error](err); ok {
 		code = fmt.Sprintf("smtp_%d", reply.Code)
 	}
 	return &Error{code: code, err: err}
 }
 
-// Send delivers one plain-text message to one recipient.
-func (s *SMTP) Send(ctx context.Context, to, subject, body string) error {
+// refused is fail for a step about this one message, where a 5xx reply
+// refuses the message for good. A 5xx to MAIL or AUTH is a fault in
+// loafkin's settings, which a retry after the fix can get past.
+func refused(code string, err error) error {
+	e := fail(code, err)
+	if reply, ok := errors.AsType[*textproto.Error](err); ok && reply.Code >= 500 {
+		e.permanent = true
+	}
+	return e
+}
+
+// Send delivers one plain-text message to one recipient. SMTP takes no
+// idempotency key, so the key goes unused.
+func (s *SMTP) Send(ctx context.Context, _ int64, to, subject, body string) error {
 	msg, err := message(s.From, to, subject, body, time.Now())
 	if err != nil {
-		return fail("smtp_message", err)
+		return &Error{code: "smtp_message", err: err, permanent: true}
 	}
 	host, _, err := net.SplitHostPort(s.Addr)
 	if err != nil {
@@ -108,6 +124,12 @@ func (s *SMTP) Send(ctx context.Context, to, subject, body string) error {
 		return fail("smtp_greeting", err)
 	}
 	defer c.Close()
+	// RFC 5321 section 4.1.1.1 asks for the client's domain, and some
+	// servers refuse net/smtp's default of localhost.
+	_, domain, _ := strings.Cut(s.From, "@")
+	if err := c.Hello(domain); err != nil {
+		return fail("smtp_hello", err)
+	}
 	if s.TLS == StartTLS {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
 			return fail("smtp_starttls_missing", nil)
@@ -125,17 +147,17 @@ func (s *SMTP) Send(ctx context.Context, to, subject, body string) error {
 		return fail("smtp_mail", err)
 	}
 	if err := c.Rcpt(to); err != nil {
-		return fail("smtp_rcpt", err)
+		return refused("smtp_rcpt", err)
 	}
 	w, err := c.Data()
 	if err != nil {
-		return fail("smtp_data", err)
+		return refused("smtp_data", err)
 	}
 	if _, err := w.Write(msg); err != nil {
-		return fail("smtp_data", err)
+		return refused("smtp_data", err)
 	}
 	if err := w.Close(); err != nil {
-		return fail("smtp_data", err)
+		return refused("smtp_data", err)
 	}
 	if err := c.Quit(); err != nil {
 		return fail("smtp_quit", err)
@@ -171,7 +193,7 @@ func message(from, to, subject, body string, now time.Time) ([]byte, error) {
 	header("Content-Transfer-Encoding", "quoted-printable")
 	b.WriteString("\r\n")
 	qp := quotedprintable.NewWriter(&b)
-	if _, err := qp.Write([]byte(strings.ReplaceAll(body, "\n", "\r\n"))); err != nil {
+	if _, err := qp.Write([]byte(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n"))); err != nil {
 		return nil, err
 	}
 	if err := qp.Close(); err != nil {

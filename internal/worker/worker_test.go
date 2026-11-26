@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,24 +22,44 @@ var now = time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
 
 type sent struct{ to, subject, body string }
 
-// fakeSender records what it sends, and fails for recipients in failFor.
+// fakeSender records what it sends, and fails for recipients in failFor
+// with err, or a plain error when err is nil. During runs before the send.
 type fakeSender struct {
 	mu      sync.Mutex
 	sent    []sent
+	tried   int
+	keys    []int64
 	failFor map[string]bool
+	err     error
 	delay   time.Duration
+	during  func()
 }
 
-func (f *fakeSender) Send(ctx context.Context, to, subject, body string) error {
+func (f *fakeSender) Send(ctx context.Context, key int64, to, subject, body string) error {
 	time.Sleep(f.delay)
+	if f.during != nil {
+		f.during()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.tried++
+	f.keys = append(f.keys, key)
 	if f.failFor[to] {
+		if f.err != nil {
+			return f.err
+		}
 		return errors.New("refused")
 	}
 	f.sent = append(f.sent, sent{to, subject, body})
 	return nil
 }
+
+// refusal is a sender error that says whether a retry can succeed.
+type refusal bool
+
+func (r refusal) Error() string     { return "refused" }
+func (r refusal) ErrorCode() string { return "test_refused" }
+func (r refusal) Permanent() bool   { return bool(r) }
 
 // emptyOutbox gives the test the outbox to itself; no other package's
 // tests write to it.
@@ -108,6 +129,10 @@ func TestSendDueSendsAndDeletesOnlyDueEmails(t *testing.T) {
 	enqueue(t, st, "due@example.com", now, now.Add(time.Hour))
 	enqueue(t, st, "later@example.com", now.Add(time.Second), now.Add(time.Hour))
 	enqueue(t, st, "expired@example.com", now.Add(-time.Hour), now)
+	var dueID int64
+	if err := pool.QueryRow(t.Context(), `SELECT id FROM outbox WHERE recipient = 'due@example.com'`).Scan(&dueID); err != nil {
+		t.Fatalf("reading the due row's id: %v", err)
+	}
 	sender := &fakeSender{}
 
 	newWorker(st, sender).SendDue(t.Context())
@@ -115,6 +140,9 @@ func TestSendDueSendsAndDeletesOnlyDueEmails(t *testing.T) {
 	want := []sent{{"due@example.com", "Subject for due@example.com", "Body\nfor due@example.com"}}
 	if fmt.Sprint(sender.sent) != fmt.Sprint(want) {
 		t.Errorf("sent %v, want %v", sender.sent, want)
+	}
+	if len(sender.keys) != 1 || sender.keys[0] != dueID {
+		t.Errorf("keys %v, want the row id %d", sender.keys, dueID)
 	}
 	rows := outboxRows(t, pool)
 	if _, ok := rows["due@example.com"]; ok || len(rows) != 2 {
@@ -197,5 +225,106 @@ func TestSweepDeletesExpiredSessionsAndEmails(t *testing.T) {
 	rows := outboxRows(t, pool)
 	if _, ok := rows["live@example.com"]; sessions != 1 || len(rows) != 1 || !ok {
 		t.Errorf("after the sweep: %d sessions and outbox %v; want 1 session and only live@", sessions, rows)
+	}
+}
+
+func TestSlowFailureWaitsFromTheEndOfTheSend(t *testing.T) {
+	pool, st := emptyOutbox(t)
+	enqueue(t, st, "slow@example.com", now, now.Add(time.Hour))
+	clock := now
+	sender := &fakeSender{
+		failFor: map[string]bool{"slow@example.com": true},
+		during:  func() { clock = clock.Add(30 * time.Second) },
+	}
+	w := newWorker(st, sender)
+	w.Now = func() time.Time { return clock }
+
+	w.SendDue(t.Context())
+
+	want := now.Add(40 * time.Second)
+	if r := outboxRows(t, pool)["slow@example.com"]; sender.tried != 1 || !r.next.Equal(want) {
+		t.Errorf("tried %d times, next at %v; want 1 try, next at %v", sender.tried, r.next, want)
+	}
+}
+
+func TestPermanentRefusalDropsTheEmail(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantRows int
+	}{
+		{"permanent", refusal(true), 0},
+		{"temporary", refusal(false), 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool, st := emptyOutbox(t)
+			enqueue(t, st, "refused@example.com", now, now.Add(time.Hour))
+			sender := &fakeSender{failFor: map[string]bool{"refused@example.com": true}, err: tt.err}
+
+			newWorker(st, sender).SendDue(t.Context())
+
+			if rows := outboxRows(t, pool); sender.tried != 1 || len(rows) != tt.wantRows {
+				t.Errorf("tried %d times, outbox %v; want 1 try and %d rows", sender.tried, rows, tt.wantRows)
+			}
+		})
+	}
+}
+
+func TestShutdownAfterDeliveryStillDeletesTheEmail(t *testing.T) {
+	pool, st := emptyOutbox(t)
+	enqueue(t, st, "delivered@example.com", now, now.Add(time.Hour))
+	ctx, cancel := context.WithCancel(t.Context())
+	sender := &fakeSender{during: cancel}
+
+	newWorker(st, sender).SendDue(ctx)
+
+	if rows := outboxRows(t, pool); len(sender.sent) != 1 || len(rows) != 0 {
+		t.Errorf("sent %v, outbox %v; want one send and an empty outbox", sender.sent, rows)
+	}
+}
+
+func TestOutboxFailureLogsItsCodeUnlessShuttingDown(t *testing.T) {
+	shared := testdb.Open(t)
+	closed, err := pgxpool.NewWithConfig(t.Context(), shared.Config())
+	if err != nil {
+		t.Fatalf("opening a pool: %v", err)
+	}
+	closed.Close()
+	tests := []struct {
+		name     string
+		shutdown bool
+		want     string
+	}{
+		{"database error", false, "level=INFO msg=\"outbox failed\" error_code=outbox_failed\n"},
+		{"shutdown", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs strings.Builder
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w := newWorker(store.New(closed), &fakeSender{})
+			w.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
+				ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+					if a.Key == slog.TimeKey {
+						return slog.Attr{}
+					}
+					return a
+				},
+			}))
+			w.Now = func() time.Time {
+				if tt.shutdown {
+					cancel()
+				}
+				return now
+			}
+
+			w.SendDue(ctx)
+
+			if logs.String() != tt.want {
+				t.Errorf("logged %q, want %q", logs.String(), tt.want)
+			}
+		})
 	}
 }

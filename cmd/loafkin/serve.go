@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,9 +66,11 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 
 	// The worker outlives the signal: D-29's order stops it only after the
 	// server has stopped accepting requests, and before the pool closes.
-	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopWork()
+	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(ctx))
 	worked := make(chan struct{})
+	// Every return waits for the worker, so the pool never closes under it.
+	stopWork := sync.OnceFunc(func() { cancelWork(); <-worked })
+	defer stopWork()
 	go func() {
 		defer close(worked)
 		(&worker.Worker{
@@ -90,7 +93,6 @@ func serve(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Log
 	defer cancel()
 	shutdownErr := srv.Shutdown(shutdownCtx)
 	stopWork()
-	<-worked
 	if shutdownErr != nil {
 		return fail("shutdown incomplete", store.ErrorCode(shutdownErr, "shutdown_failed"))
 	}

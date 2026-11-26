@@ -43,36 +43,53 @@ func (t *Tx) EnqueueEmail(ctx context.Context, e Email, now, expires time.Time) 
 // ErrNoEmail reports that no email is due.
 var ErrNoEmail = errors.New("store: no email due")
 
+// afterSendTimeout bounds the statements that record a send. They run
+// even after ctx is canceled, so a shutdown cannot undo a delivery.
+const afterSendTimeout = 5 * time.Second
+
 // SendNextEmail claims one due email and passes it to send, as the
 // system identity background work runs as (D-21). The row stays locked
 // while send runs, so another worker skips it. It is deleted when send
-// succeeds. When send fails, the attempt is counted, the next one waits
-// until retryAt(attempts), and SendNextEmail returns send's error.
-func (s *Store) SendNextEmail(ctx context.Context, now time.Time, send func(Email) error, retryAt func(attempts int) time.Time) error {
-	var sendErr error
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var e Email
-		err := tx.QueryRow(ctx, `
-			SELECT id, account_id, recipient, subject, body, attempts FROM outbox
-			WHERE next_attempt_at <= $1 AND expires_at > $1
-			ORDER BY next_attempt_at
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED`, now).Scan(&e.ID, &e.AccountID, &e.Recipient, &e.Subject, &e.Body, &e.Attempts)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNoEmail
-		}
-		if err != nil {
-			return err
-		}
-		if sendErr = send(e); sendErr != nil {
-			_, err := tx.Exec(ctx, `UPDATE outbox SET attempts = attempts + 1, next_attempt_at = $2 WHERE id = $1`,
-				e.ID, retryAt(e.Attempts+1))
-			return err
-		}
-		_, err = tx.Exec(ctx, `DELETE FROM outbox WHERE id = $1`, e.ID)
-		return err
-	})
+// succeeds. When send fails, retry decides: the attempt is counted and
+// the next one waits until the time retry returns, or, when retry
+// returns false, the row is deleted. SendNextEmail returns send's error.
+func (s *Store) SendNextEmail(ctx context.Context, now time.Time, send func(Email) error, retry func(attempts int, sendErr error) (time.Time, bool)) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return err
+	}
+	after, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterSendTimeout)
+	defer cancel()
+	defer func() { _ = tx.Rollback(after) }()
+
+	var e Email
+	err = tx.QueryRow(ctx, `
+		SELECT id, account_id, recipient, subject, body, attempts FROM outbox
+		WHERE next_attempt_at <= $1 AND expires_at > $1
+		ORDER BY next_attempt_at
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`, now).Scan(&e.ID, &e.AccountID, &e.Recipient, &e.Subject, &e.Body, &e.Attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNoEmail
+	}
+	if err != nil {
+		return err
+	}
+	sendErr := send(e)
+	var at time.Time
+	retrying := false
+	if sendErr != nil {
+		at, retrying = retry(e.Attempts+1, sendErr)
+	}
+	if retrying {
+		_, err = tx.Exec(after, `UPDATE outbox SET attempts = attempts + 1, next_attempt_at = $2 WHERE id = $1`, e.ID, at)
+	} else {
+		_, err = tx.Exec(after, `DELETE FROM outbox WHERE id = $1`, e.ID)
+	}
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(after); err != nil {
 		return err
 	}
 	return sendErr
